@@ -1,0 +1,201 @@
+/**
+ * The conversational half of the ComfyUI mode.
+ *
+ * `defineTool` belongs to whoever loaded this plugin: dynamic cordis packages
+ * get a `harness` global, and anything loaded as a plain module has to import
+ * `@deepseek-ai/dsh-tools`. Both accept the same specification object, so this
+ * module only builds that object — no Node APIs, no cordis services — which
+ * lets the test suite read every visible part of it without a Harness.
+ */
+
+/** How the model reaches this panel's ComfyUI run. */
+export const TOOL_NAME = 'comfyui_generate'
+
+/** Workflows are slow; give them the budget the panel gives them. */
+export const TOOL_TIMEOUT_MS = 300000
+
+/**
+ * The image reference a result carries back into the conversation.
+ *
+ * Every field here comes straight out of the attachment store's own save
+ * result, which is why `width` and `height` are required: it is the store, not
+ * this module, that reads them off the decoded image.
+ */
+export const IMAGE_VALUE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    attachmentId: { type: 'string', required: true },
+    mediaType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], required: true },
+    bytes: { type: 'integer', required: true },
+    width: { type: 'integer', required: true },
+    height: { type: 'integer', required: true },
+    name: { type: 'string' },
+    originalDimensions: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        width: { type: 'integer', required: true },
+        height: { type: 'integer', required: true },
+      },
+    },
+  },
+}
+
+const GALLERY_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', required: true },
+    mediaType: { type: 'string', required: true },
+    bytes: { type: 'integer', required: true },
+    url: { type: 'string', required: true },
+  },
+}
+
+/** What one successful run hands back. `image` is absent when only text came back. */
+export const OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ok: { type: 'boolean', required: true },
+    workflow: { type: 'string', required: true },
+    count: { type: 'integer', required: true },
+    elapsedMs: { type: 'integer', required: true },
+    gallery: { type: 'array', items: GALLERY_ITEM_SCHEMA, required: true },
+    text: { type: 'string', required: true },
+    image: IMAGE_VALUE_SCHEMA,
+    note: { type: 'string' },
+  },
+}
+
+/** Keep only the fields the conversation can carry, and only when they are real. */
+function pickImageRef(ref) {
+  if (ref === null || typeof ref !== 'object') return null
+  const picked = {}
+  for (const key of ['attachmentId', 'mediaType', 'bytes', 'width', 'height', 'name']) {
+    const value = ref[key]
+    if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) picked[key] = value
+  }
+  const box = ref.originalDimensions
+  if (box !== null && typeof box === 'object' && Number.isFinite(Number(box.width)) && Number.isFinite(Number(box.height))) {
+    picked.originalDimensions = { width: Number(box.width), height: Number(box.height) }
+  }
+  return typeof picked.attachmentId === 'string' && typeof picked.mediaType === 'string' ? picked : null
+}
+
+/** One gallery entry as the conversation may see it — never the image bytes. */
+function summarizeImage(image) {
+  return {
+    name: String(image?.name ?? ''),
+    mediaType: String(image?.mediaType ?? ''),
+    bytes: Number(image?.bytes ?? 0),
+    url: String(image?.url ?? ''),
+  }
+}
+
+/** The host-side request body for one run, from whatever the model sent. */
+function toolBody(args) {
+  const body = {}
+  if (typeof args?.prompt === 'string') body.prompt = args.prompt
+  if (typeof args?.negative === 'string') body.negative = args.negative
+  if (typeof args?.workflow === 'string' && args.workflow.trim() !== '') body.workflow = args.workflow.trim()
+  if (typeof args?.baseUrl === 'string' && args.baseUrl.trim() !== '') body.baseUrl = args.baseUrl.trim()
+  return body
+}
+
+/**
+ * Build the ComfyUI tool.
+ *
+ * @param input.run - run one workflow body; resolves to the panel's own comfy
+ *   result, including the produced files.
+ * @param input.admit - store one image as a conversation attachment. A `null`
+ *   result or a throw degrades the answer to its text summary rather than
+ *   failing the run, so a Harness without attachment support still works.
+ */
+export function makeComfyTool(input) {
+  const run = input?.run
+  const admit = input?.admit
+  return {
+    name: TOOL_NAME,
+    description: '用提示词在本机 ComfyUI 上跑一个工作流，返回产出的图片。'
+      + '工作流默认取生图面板保存的那个，也可以用 workflow 指定文件名；'
+      + 'ComfyUI 不在默认端口时可以用 baseUrl 覆盖地址。'
+      + 'ComfyUI 没启动、工作流不含正向/负向 conditioning 入口或换不了参考图时会直接报错。',
+    parameters: {
+      prompt: { type: 'string', required: true, description: '正向提示词。会写进工作流里接采样器的文本编码节点。' },
+      negative: { type: 'string', description: '反向提示词，写进负向文本编码节点。' },
+      workflow: { type: 'string', description: '工作流文件名，例如 my-workflow.json。省略则用面板当前保存的工作流。' },
+      baseUrl: { type: 'string', description: 'ComfyUI 的 http 地址，例如 http://127.0.0.1:8188。省略则用面板保存的地址。' },
+    },
+    timeoutMs: TOOL_TIMEOUT_MS,
+    output: {
+      schema: OUTPUT_SCHEMA,
+      render: (_args, value) => {
+        const blocks = [{ type: 'text', text: String(value?.text ?? '') }]
+        if (value?.image !== undefined && value.image !== null && typeof value.image === 'object') {
+          blocks.push({ type: 'image', attachment: value.image })
+        }
+        return blocks
+      },
+    },
+    async execute(args) {
+      const result = await run(toolBody(args))
+      const files = Array.isArray(result?.files) ? result.files : []
+      const gallery = (Array.isArray(result?.images) ? result.images : []).map(summarizeImage)
+      let image = null
+      let attachNote = null
+      if (typeof admit === 'function' && files.length > 0) {
+        try {
+          image = pickImageRef(await admit(files[0]))
+        } catch (error) {
+          attachNote = '图片没能挂进对话附件：' + String(error?.message ?? error)
+        }
+      }
+      const seconds = Math.max(1, Math.round(Number(result?.elapsedMs ?? 0) / 1000))
+      const names = gallery.map((entry) => entry.name).filter((name) => name !== '')
+      const lines = [
+        '工作流 ' + String(result?.workflow ?? '') + ' 已跑完，产出 ' + String(files.length) + ' 张图，用时 ' + String(seconds) + ' 秒。',
+        '画廊文件：' + (names.length > 0 ? names.join('、') : '（没有产出图片）'),
+        image === null
+          ? '这次只回传文字摘要；图片留在面板画廊里，可以去「生图画廊」查看。'
+          : '图片已回传到对话里。',
+      ]
+      const notes = [String(result?.note ?? ''), attachNote].filter((note) => typeof note === 'string' && note !== '')
+      const payload = {
+        ok: true,
+        workflow: String(result?.workflow ?? ''),
+        count: files.length,
+        elapsedMs: Number(result?.elapsedMs ?? 0),
+        gallery,
+        text: lines.join('\n'),
+      }
+      if (notes.length > 0) payload.note = notes.join('；')
+      if (image !== null) payload.image = image
+      return payload
+    },
+  }
+}
+
+/**
+ * Resolve this host's `defineTool`.
+ *
+ * Dynamic cordis packages are handed a `harness` global; anything else has to
+ * reach the package through the loader's own module graph. Neither being
+ * available simply means no conversational tool gets registered — the panel
+ * itself never depended on one.
+ *
+ * @returns the factory, or `null` when no tool runtime is reachable.
+ */
+export async function resolveDefineTool() {
+  if (typeof harness !== 'undefined' && harness !== null && typeof harness.defineTool === 'function') {
+    return harness.defineTool.bind(harness)
+  }
+  try {
+    const imported = await import('@deepseek-ai/dsh-tools')
+    if (imported !== null && typeof imported?.defineTool === 'function') return imported.defineTool
+  } catch {
+    // No tool runtime reachable from here; the panel keeps working without one.
+  }
+  return null
+}

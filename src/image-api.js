@@ -1,0 +1,619 @@
+/**
+ * Image API adapters for the image studio host half.
+ *
+ * Exactly two provider families are spoken here, and both return normalized
+ * bytes so the rest of the host half never learns a provider's response shape:
+ *
+ *  - `openai`: the OpenAI-compatible `images/generations` and `images/edits`
+ *    pair, which covers OpenAI, OpenRouter-style relays, Seedream/Ark,
+ *    DashScope's compatible mode, xAI and Zhipu;
+ *  - `google`: Google's single `interactions` endpoint, one request shape for
+ *    both a fresh render and an edit.
+ *
+ * The same two families also expose a model catalog, which is what
+ * `listModels` reads so the panel can offer a dropdown instead of asking the
+ * user to type a model id from memory.
+ *
+ * Nothing in this file touches the disk or the browser, so it is unit-testable
+ * on its own.
+ */
+
+/** Refuse a single image larger than this. */
+export const MAX_IMAGE_BYTES = 32 * 1024 * 1024
+
+/** How long one model-catalog request may take before the panel gives up. */
+export const MODEL_LIST_TIMEOUT_MS = 15000
+
+/** A catalog is truncated at this many ids so one relay cannot flood the panel. */
+export const MAX_MODEL_IDS = 400
+
+/**
+ * The providers the panel can talk to, in the order a settings surface lists
+ * them. `baseURL` is an editable default; an empty one must be filled in by the
+ * user. `editFormats` are the wire shapes this provider family is known to
+ * accept, most likely first.
+ */
+export const PROVIDERS = [
+  {
+    id: 'openai-compat',
+    label: 'OpenAI 兼容服务（自填地址）',
+    family: 'openai',
+    baseURL: '',
+    apiKeyRef: 'DSH_IMAGE_STUDIO_API_KEY',
+    supportsSize: true,
+    supportsQuality: false,
+    editFormats: ['multipart', 'jsonImageUrlArray', 'formReferenceImages', 'xaiJson'],
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    family: 'openai',
+    baseURL: 'https://api.openai.com/v1',
+    apiKeyRef: 'OPENAI_API_KEY',
+    supportsSize: true,
+    supportsQuality: true,
+    editFormats: ['multipart', 'jsonImageUrlArray'],
+  },
+  {
+    id: 'google',
+    label: 'Google Gemini',
+    family: 'google',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+    apiKeyRef: 'GEMINI_API_KEY',
+    supportsSize: false,
+    supportsQuality: false,
+    editFormats: [],
+  },
+  {
+    id: 'seedream',
+    label: '火山方舟 Seedream',
+    family: 'openai',
+    baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+    apiKeyRef: 'ARK_API_KEY',
+    supportsSize: true,
+    supportsQuality: false,
+    editFormats: ['multipart', 'jsonImageUrlArray'],
+  },
+  {
+    id: 'dashscope',
+    label: '阿里云百炼 DashScope',
+    family: 'openai',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    apiKeyRef: 'DASHSCOPE_API_KEY',
+    supportsSize: true,
+    supportsQuality: false,
+    editFormats: ['multipart', 'jsonImageUrlArray'],
+  },
+  {
+    id: 'xai',
+    label: 'xAI Grok',
+    family: 'openai',
+    baseURL: 'https://api.x.ai/v1',
+    apiKeyRef: 'XAI_API_KEY',
+    supportsSize: false,
+    supportsQuality: false,
+    editFormats: ['xaiJson', 'multipart'],
+  },
+  {
+    id: 'zhipu',
+    label: '智谱 BigModel',
+    family: 'openai',
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    apiKeyRef: 'ZHIPU_API_KEY',
+    supportsSize: true,
+    supportsQuality: false,
+    editFormats: ['multipart', 'jsonImageUrlArray'],
+  },
+]
+
+/** The edit wire shapes the OpenAI-compatible endpoint accepts. */
+export const EDIT_FORMATS = ['multipart', 'jsonImageUrlArray', 'formReferenceImages', 'xaiJson']
+
+/** The provider descriptor for one id, or undefined when it is unknown. */
+export function providerById(id) {
+  return PROVIDERS.find((entry) => entry.id === id)
+}
+
+/** The provider descriptor for one id, refusing an unknown id. */
+export function requireProvider(id) {
+  const provider = providerById(id)
+  if (!provider) throw new Error('未知的图像服务：' + String(id))
+  return provider
+}
+
+/** True when the credential reference name is one the credential store accepts. */
+export function isCredentialRefName(value) {
+  return typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value)
+}
+
+/** Build one image endpoint URL from a base URL. */
+export function imageEndpoint(baseURL, operation) {
+  const base = String(baseURL ?? '')
+  if (base.length === 0) throw new Error('图像服务地址不能为空')
+  let url
+  try {
+    url = new URL('images/' + operation, base.endsWith('/') ? base : base + '/')
+  } catch {
+    throw new Error('图像服务地址必须是完整的绝对 URL')
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('图像服务地址必须是 http(s) URL')
+  return url.toString()
+}
+
+/** Build the model-catalog URL for an OpenAI-compatible base URL. */
+export function modelsEndpoint(baseURL) {
+  const base = String(baseURL ?? '')
+  if (base.length === 0) throw new Error('图像服务地址不能为空')
+  let url
+  try {
+    url = new URL('models', base.endsWith('/') ? base : base + '/')
+  } catch {
+    throw new Error('图像服务地址必须是完整的绝对 URL')
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('图像服务地址必须是 http(s) URL')
+  return url.toString()
+}
+
+/**
+ * Build the model-catalog URL for a Google base URL.
+ *
+ * An operation segment at the end (`…/v1beta/interactions`) is swapped for
+ * `models`; a base that already ends at a version path (`…/v1beta`) gets
+ * `models` appended instead, so both spellings reach the catalog.
+ */
+export function googleModelsEndpoint(baseURL) {
+  const base = String(baseURL ?? '')
+  if (base.length === 0) throw new Error('图像服务地址不能为空')
+  let url
+  try {
+    url = new URL(base)
+  } catch {
+    throw new Error('图像服务地址必须是完整的绝对 URL')
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('图像服务地址必须是 http(s) URL')
+  const segments = url.pathname.split('/').filter((segment) => segment.length > 0)
+  const last = segments[segments.length - 1]
+  if (last === undefined || /^v\d/i.test(last)) segments.push('models')
+  else segments[segments.length - 1] = 'models'
+  url.pathname = '/' + segments.join('/')
+  url.hash = ''
+  url.search = ''
+  url.searchParams.set('pageSize', '1000')
+  return url.toString()
+}
+
+/**
+ * Read the model ids out of one catalog payload.
+ *
+ * Google nests them under `models[].name` with a `models/` prefix; the
+ * OpenAI-compatible shape is either `data[].id` or `models[].id`.
+ */
+export function parseModelIds(payload, family = 'openai') {
+  const ids = []
+  const push = (value) => {
+    if (typeof value === 'string' && value.length > 0) ids.push(value)
+  }
+  if (family === 'google') {
+    const models = Array.isArray(payload?.models) ? payload.models : []
+    for (const entry of models) {
+      const name = typeof entry?.name === 'string' ? entry.name : ''
+      push(name.startsWith('models/') ? name.slice('models/'.length) : name)
+    }
+    return ids
+  }
+  if (Array.isArray(payload?.data)) for (const entry of payload.data) push(entry?.id)
+  if (Array.isArray(payload?.models)) for (const entry of payload.models) push(entry?.id)
+  return ids
+}
+
+/**
+ * Ids that look like they can render an image. The dropdown still offers every
+ * id the service returned — this only decides which ones float to the top, so a
+ * relay with unusual naming never hides the model the user actually needs.
+ */
+const IMAGE_MODEL_PATTERN = /(^|[-_.])(image|imagen|flux|seedream|seededit|dall-e|gpt-image|cogview|kolors|qwen-image|wan|hunyuan-image|sd|sd3|sdxl)/i
+
+/** Dedupe ids, most image-like first, keeping each group's original order. */
+export function rankModelIds(ids) {
+  const seen = new Set()
+  const images = []
+  const others = []
+  for (const id of Array.isArray(ids) ? ids : []) {
+    const value = String(id ?? '').trim()
+    if (value.length === 0 || seen.has(value)) continue
+    seen.add(value)
+    if (IMAGE_MODEL_PATTERN.test(value)) images.push(value)
+    else others.push(value)
+  }
+  return [...images, ...others]
+}
+
+/**
+ * Read the model catalog of one provider.
+ *
+ * @returns the ranked model ids, truncated to {@link MAX_MODEL_IDS}.
+ */
+export async function listModels(input) {
+  const provider = requireProvider(input.provider)
+  const baseURL = String(input.baseURL ?? '') || provider.baseURL
+  const url =
+    provider.family === 'google' ? googleModelsEndpoint(baseURL) : modelsEndpoint(baseURL)
+  const headers =
+    provider.family === 'google'
+      ? { 'x-goog-api-key': String(input.apiKey ?? '') }
+      : { authorization: 'Bearer ' + String(input.apiKey ?? '') }
+  const response = await fetch(url, {
+    method: 'GET',
+    redirect: 'follow',
+    signal: input.signal ?? AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
+    headers,
+  })
+  const text = await response.text().catch(() => '')
+  if (!response.ok) {
+    throw new Error(
+      provider.label +
+        ' 读取模型列表失败 (' +
+        response.status +
+        ')：' +
+        redactSecrets(text, input.apiKey).slice(0, 512),
+    )
+  }
+  let payload
+  try {
+    payload = JSON.parse(text)
+  } catch {
+    throw new Error(provider.label + ' 模型列表返回的不是有效 JSON')
+  }
+  return rankModelIds(parseModelIds(payload, provider.family)).slice(0, MAX_MODEL_IDS)
+}
+
+/**
+ * Render one image from a text prompt.
+ *
+ * @returns the encoded image bytes and their media type.
+ */
+export async function generateImage(input) {
+  const provider = requireProvider(input.provider)
+  if (provider.family === 'google') return generateGoogleImage({ ...input, provider: provider.id })
+  return generateOpenAICompatibleImage({ ...input, provider: provider.id })
+}
+
+/**
+ * Render one image from a prompt plus one or more reference images.
+ *
+ * @returns the encoded image bytes and their media type.
+ */
+export async function editImage(input) {
+  const provider = requireProvider(input.provider)
+  if (provider.family === 'google') return editGoogleImage({ ...input, provider: provider.id })
+  return editOpenAICompatibleImage({ ...input, provider: provider.id })
+}
+
+/** POST one prompt to an OpenAI-compatible `images/generations` endpoint. */
+async function generateOpenAICompatibleImage(input) {
+  const provider = requireProvider(input.provider)
+  const endpoint = imageEndpoint(input.baseURL || provider.baseURL, 'generations')
+  const body = {
+    model: input.model,
+    prompt: input.prompt,
+    ...(provider.supportsSize && input.size ? { size: input.size } : {}),
+    ...(provider.supportsQuality && input.quality ? { quality: input.quality } : {}),
+    ...(provider.id === 'seedream' ? { response_format: 'url' } : {}),
+    ...input.extraBody,
+  }
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    redirect: 'error',
+    signal: input.signal,
+    headers: {
+      authorization: 'Bearer ' + input.apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  return parseImageResponse(response, provider.id, input)
+}
+
+/**
+ * POST one prompt plus reference images to an OpenAI-compatible
+ * `images/edits` endpoint, in the wire shape the configuration selected.
+ */
+async function editOpenAICompatibleImage(input) {
+  const provider = requireProvider(input.provider)
+  const endpoint = imageEndpoint(input.baseURL || provider.baseURL, 'edits')
+  const format = input.editFormat ?? provider.editFormats[0] ?? 'multipart'
+  if (!provider.editFormats.includes(format)) {
+    throw new Error(provider.label + ' 不支持所选的编辑格式：' + String(format))
+  }
+  const headers = { authorization: 'Bearer ' + input.apiKey }
+  let body
+  if (format === 'xaiJson') {
+    body = JSON.stringify({
+      model: input.model,
+      prompt: input.prompt,
+      ...(input.referenceImages.length === 1
+        ? { image: { type: 'image_url', url: toDataUrl(input.referenceImages[0]) } }
+        : { images: input.referenceImages.map((image) => ({ type: 'image_url', url: toDataUrl(image) })) }),
+      ...input.extraBody,
+    })
+    headers['content-type'] = 'application/json'
+  } else if (format === 'jsonImageUrlArray') {
+    body = JSON.stringify({
+      model: input.model,
+      images: input.referenceImages.map((image) => ({ image_url: toDataUrl(image) })),
+      prompt: input.prompt,
+      n: 1,
+      size: input.size || 'auto',
+      response_format: 'url',
+      ...(provider.supportsQuality && input.quality ? { quality: input.quality } : {}),
+      ...input.extraBody,
+    })
+    headers['content-type'] = 'application/json'
+  } else if (format === 'formReferenceImages') {
+    const form = new FormData()
+    form.append('model', input.model)
+    form.append('prompt', input.prompt)
+    form.append('response_format', 'b64_json')
+    if (input.size) form.append('size', input.size)
+    if (provider.supportsQuality && input.quality) form.append('quality', input.quality)
+    form.append('reference_images', JSON.stringify(input.referenceImages.map((image) => toBase64(image.data))))
+    if (input.extraBody) form.append('extra_body', JSON.stringify(input.extraBody))
+    body = form
+  } else {
+    const form = new FormData()
+    form.append('model', input.model)
+    form.append('prompt', input.prompt)
+    if (input.size) form.append('size', input.size)
+    if (provider.supportsQuality && input.quality) form.append('quality', input.quality)
+    if (input.extraBody) form.append('extra_body', JSON.stringify(input.extraBody))
+    const field = input.referenceImages.length === 1 ? 'image' : 'image[]'
+    input.referenceImages.forEach((image, index) => {
+      const blob = new Blob([image.data], { type: image.mediaType })
+      form.append(field, blob, 'reference-' + String(index + 1) + '.' + extensionFor(image.mediaType))
+    })
+    body = form
+  }
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    redirect: 'error',
+    signal: input.signal,
+    headers,
+    body,
+  })
+  return parseImageResponse(response, provider.id, input)
+}
+
+/** POST one prompt to Google's `interactions` endpoint. */
+function generateGoogleImage(input) {
+  return requestGoogleImage({ ...input, operation: 'generation', interactionInput: input.prompt })
+}
+
+/** POST one prompt plus reference images to Google's `interactions` endpoint. */
+function editGoogleImage(input) {
+  const images = input.referenceImages
+  const parts = []
+  if (images.length === 1) {
+    parts.push({ type: 'image', mime_type: images[0].mediaType, data: toBase64(images[0].data) })
+    parts.push({ type: 'text', text: input.prompt })
+  } else {
+    images.forEach((image, index) => {
+      parts.push({ type: 'text', text: '图 ' + String(index + 1) + ' (Image ' + String(index + 1) + '):' })
+      parts.push({ type: 'image', mime_type: image.mediaType, data: toBase64(image.data) })
+    })
+    parts.push({ type: 'text', text: input.prompt })
+  }
+  return requestGoogleImage({ ...input, operation: 'edit', interactionInput: parts })
+}
+
+/** One Google `interactions` request, edit or generation alike. */
+async function requestGoogleImage(input) {
+  const provider = requireProvider(input.provider)
+  const label = 'Google 图像' + (input.operation === 'edit' ? '编辑' : '生成')
+  const maxBytes = input.maxBytes ?? MAX_IMAGE_BYTES
+  const response = await fetch(input.baseURL || provider.baseURL, {
+    method: 'POST',
+    redirect: 'error',
+    signal: input.signal,
+    headers: {
+      'content-type': 'application/json',
+      'x-goog-api-key': input.apiKey,
+    },
+    body: JSON.stringify({
+      model: input.model,
+      input: input.interactionInput,
+      response_format: {
+        type: 'image',
+        mime_type: 'image/jpeg',
+        aspect_ratio: input.aspectRatio,
+        image_size: input.imageSize,
+      },
+    }),
+  })
+  const text = await readBoundedText(response, Math.ceil(maxBytes * 1.4) + 4096)
+  if (!response.ok) {
+    throw new Error(label + '失败 (' + String(response.status) + ')：' + redactSecrets(text, input.apiKey).slice(0, 4096))
+  }
+  let payload
+  try { payload = JSON.parse(text) } catch { throw new Error(label + '返回的不是有效 JSON') }
+  const image = googleOutputImage(payload)
+  if (!image) throw new Error(label + '未返回图像：' + redactSecrets(text, input.apiKey).slice(0, 512))
+  if (typeof image.data !== 'string') throw new Error(label + '返回了不支持的图像数据')
+  const mediaType = imageMediaType(image.mime_type)
+  if (!mediaType) throw new Error(label + '返回了不支持的媒体类型 ' + JSON.stringify(image.mime_type))
+  const data = decodeBase64(image.data)
+  if (data.length > maxBytes) throw new Error(label + '超过 ' + String(maxBytes) + ' 字节上限')
+  return { data, mediaType }
+}
+
+/** Relay one OpenAI-compatible image response, following a URL when offered. */
+async function parseImageResponse(response, provider, input) {
+  const maxBytes = input.maxBytes ?? MAX_IMAGE_BYTES
+  const text = await readBoundedText(response, Math.ceil(maxBytes * 1.4) + 4096)
+  if (!response.ok) {
+    throw new Error(
+      provider + ' 图像请求失败 (' + String(response.status) + ')：' + redactSecrets(text, input.apiKey).slice(0, 4096),
+    )
+  }
+  let payload
+  try { payload = JSON.parse(text) } catch { throw new Error(provider + ' 图像请求返回的不是有效 JSON') }
+  const image = firstImage(payload)
+  if (!image) throw new Error(provider + ' 图像请求未返回图像数据')
+  if (typeof image.b64_json === 'string') {
+    const data = decodeBase64(image.b64_json)
+    if (data.length > maxBytes) throw new Error(provider + ' 返回的图像超过 ' + String(maxBytes) + ' 字节上限')
+    const mediaType = detectImageMediaType(data) ?? imageMediaType(image.mime_type) ?? 'image/png'
+    return { data, mediaType }
+  }
+  return downloadImage(image.url, provider, input)
+}
+
+/** Fetch an image the provider returned as a URL rather than inline bytes. */
+async function downloadImage(url, provider, input) {
+  if (typeof url !== 'string' || url.length === 0) throw new Error(provider + ' 图像请求未返回图像数据')
+  const maxBytes = input.maxBytes ?? MAX_IMAGE_BYTES
+  if (url.startsWith('data:')) {
+    const separator = url.indexOf(',')
+    if (separator < 0) throw new Error(provider + ' 返回了无效的 data URL')
+    const header = url.slice(5, separator)
+    const data = decodeBase64(url.slice(separator + 1))
+    if (data.length > maxBytes) throw new Error(provider + ' 返回的图像超过 ' + String(maxBytes) + ' 字节上限')
+    const declared = header.split(';')[0]
+    const mediaType = detectImageMediaType(data) ?? imageMediaType(declared)
+    if (!mediaType) throw new Error(provider + ' 返回了不支持的媒体类型 ' + JSON.stringify(declared))
+    return { data, mediaType }
+  }
+  const response = await fetch(url, { method: 'GET', redirect: 'error', signal: input.signal })
+  if (!response.ok) {
+    throw new Error(provider + ' 图像下载失败 (' + String(response.status) + ')')
+  }
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length > maxBytes) throw new Error(provider + ' 返回的图像超过 ' + String(maxBytes) + ' 字节上限')
+  const data = new Uint8Array(buffer)
+  const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type') ?? '')
+  if (!mediaType) throw new Error(provider + ' 返回了不支持的媒体类型')
+  return { data, mediaType }
+}
+
+/** Pull the first image out of any of the response envelopes in the wild. */
+function firstImage(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  for (const key of ['data', 'images', 'output']) {
+    const list = value[key]
+    if (!Array.isArray(list) || list.length === 0) continue
+    const first = list[0]
+    if (typeof first !== 'object' || first === null) continue
+    const declared = typeof first.mime_type === 'string' ? first.mime_type : first.mime
+    const mime = typeof declared === 'string' ? declared : undefined
+    if (typeof first.b64_json === 'string') return { b64_json: first.b64_json, mime_type: mime }
+    if (typeof first.url === 'string') return { url: first.url, mime_type: mime }
+  }
+  return undefined
+}
+
+/** Pull the first image out of a Google `interactions` payload. */
+function googleOutputImage(payload) {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const direct = imageContent(payload.output_image, false)
+  if (direct) return direct
+  const steps = Array.isArray(payload.steps) ? payload.steps : []
+  for (const step of steps) {
+    if (typeof step !== 'object' || step === null || step.type !== 'model_output') continue
+    const content = Array.isArray(step.content) ? step.content : []
+    for (const part of content) {
+      const found = imageContent(part, true)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+/** Read one image content part, optionally insisting on the `image` type tag. */
+function imageContent(value, requireType) {
+  if (typeof value !== 'object' || value === null) return undefined
+  if (requireType && value.type !== 'image') return undefined
+  if (typeof value.data !== 'string') return undefined
+  const declared = typeof value.mime_type === 'string' ? value.mime_type : value.mime
+  return { data: value.data, mime_type: typeof declared === 'string' ? declared : undefined }
+}
+
+/** Read at most `maxBytes` of a response body as UTF-8 text. */
+async function readBoundedText(response, maxBytes) {
+  const reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : null
+  if (!reader) {
+    const text = await response.text()
+    return text.length > maxBytes ? text.slice(0, maxBytes) : text
+  }
+  const chunks = []
+  let size = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    chunks.push(Buffer.from(value))
+    size += value.length
+    if (size >= maxBytes) {
+      await reader.cancel().catch(() => {})
+      break
+    }
+  }
+  return Buffer.concat(chunks).subarray(0, maxBytes).toString('utf8')
+}
+
+/** Remove a secret from anything that is about to be shown or logged. */
+export function redactSecrets(text, secret) {
+  const value = String(text ?? '')
+  if (typeof secret !== 'string' || secret.length === 0) return value
+  return value.split(secret).join('[redacted]')
+}
+
+/** Decode base64, tolerating a `data:` prefix, refusing empty output. */
+export function decodeBase64(value) {
+  const text = String(value ?? '')
+  const body = text.startsWith('data:') ? text.slice(text.indexOf(',') + 1) : text
+  const buffer = Buffer.from(body, 'base64')
+  if (buffer.length === 0) throw new Error('图像数据为空')
+  return new Uint8Array(buffer)
+}
+
+/** Recognize the raster formats the panel can store. */
+export function detectImageMediaType(bytes) {
+  const buffer = Buffer.from(bytes.buffer ?? bytes, bytes.byteOffset ?? 0, bytes.length)
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg'
+  if (buffer.length >= 6) {
+    const signature = buffer.subarray(0, 6).toString('latin1')
+    if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif'
+  }
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP') {
+    return 'image/webp'
+  }
+  return undefined
+}
+
+/** Normalize a declared media type, rejecting anything not stored as a raster. */
+export function imageMediaType(value) {
+  const type = String(value ?? '').split(';')[0].trim().toLowerCase()
+  if (type === 'image/png') return 'image/png'
+  if (type === 'image/jpeg' || type === 'image/jpg') return 'image/jpeg'
+  if (type === 'image/webp') return 'image/webp'
+  if (type === 'image/gif') return 'image/gif'
+  return undefined
+}
+
+/** The file extension for one stored media type. */
+export function extensionFor(mediaType) {
+  if (mediaType === 'image/jpeg') return 'jpg'
+  if (mediaType === 'image/webp') return 'webp'
+  if (mediaType === 'image/gif') return 'gif'
+  return 'png'
+}
+
+/** Inline one image as a `data:` URL. */
+function toDataUrl(image) {
+  return 'data:' + image.mediaType + ';base64,' + toBase64(image.data)
+}
+
+/** Base64-encode image bytes. */
+function toBase64(data) {
+  return Buffer.from(data).toString('base64')
+}

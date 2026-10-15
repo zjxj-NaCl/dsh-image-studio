@@ -1,0 +1,658 @@
+/**
+ * ComfyUI backend, node half.
+ *
+ * A direct client for a ComfyUI server the user runs next to this harness.
+ * The project Agent is deliberately not involved: the workflow library lives in
+ * ComfyUI's own user-data directory and the run is queued on ComfyUI's own
+ * queue, so the panel talks HTTP straight to it.
+ *
+ * Three endpoints of the ComfyUI server are used:
+ *
+ *  - `GET /v2/userdata?path=workflows` lists the workflows the user has saved
+ *    in the ComfyUI UI. There is no `/workflows` route; the browser frontend
+ *    reads this same user-data tree.
+ *  - `GET /userdata/{file}` returns one saved workflow verbatim.
+ *  - `POST /prompt`, `GET /history/{id}` and `GET /view` run it and hand back
+ *    the images.
+ *
+ * The awkward part is the two workflow JSON dialects. `POST /prompt` only
+ * accepts API format (`{nodeId: {class_type, inputs}}`), while the files the
+ * ComfyUI UI saves are usually UI format (a `nodes`/`links` graph). Since
+ * ComfyUI exposes no conversion route, `toApiGraph` does the conversion here
+ * using `/object_info` to learn each node's real input order.
+ */
+
+/** How long a ComfyUI call may take before it is treated as broken. */
+export const COMFY_TIMEOUT_MS = 30000
+
+/** Listing workflows and reading one file are quick local reads. */
+const CATALOG_TIMEOUT_MS = 20000
+
+/** Uploading a reference image into ComfyUI's input directory. */
+const UPLOAD_TIMEOUT_MS = 120000
+
+/** Downloading one produced image from `/view`. */
+const VIEW_TIMEOUT_MS = 120000
+
+/** Polling cadence while a prompt sits in the queue. */
+const POLL_INTERVAL_MS = 1000
+
+/** Refuse an implausibly large image instead of buffering it. */
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024
+
+/** ComfyUI's own name for the directory holding saved workflows. */
+const WORKFLOWS_DIR = 'workflows'
+
+/** Node classes that hold the prompt text a workflow consumes. */
+const TEXT_ENCODE_CLASSES = ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'CLIPTextEncodeFlux', 'CLIPTextEncodeHunyuanDiT', 'CLIPTextEncodeQwenImage']
+
+/** Node classes that sample, and whose conditioning inputs we follow. */
+const SAMPLER_CLASSES = ['KSampler', 'KSamplerAdvanced', 'KSamplerSelect', 'SamplerCustom', 'SamplerCustomAdvanced']
+
+/** Input slots on a sampler that carry conditioning. */
+const CONDITIONING_KEYS = ['positive', 'negative']
+
+/**
+ * Answer whether a workflow graph is in API format.
+ *
+ * API format is a bare map of node id to `{class_type, inputs}`. Any other
+ * object — including a UI graph with `nodes`/`links` — is not.
+ *
+ * @param value - a parsed workflow JSON document.
+ * @returns true when the value looks like an API graph.
+ */
+export function isApiFormat(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entries = Object.entries(value)
+  if (entries.length === 0) return false
+  return entries.every(([, node]) => Boolean(node) && typeof node === 'object' && typeof node.class_type === 'string')
+}
+
+/**
+ * Convert a UI-format workflow graph into API format.
+ *
+ * ComfyUI's UI graph stores connections as `links` (a flat list of
+ * `[linkId, sourceNode, sourceSlot, targetNode, targetSlot, type]`) and node
+ * inputs as widget values plus, for wired slots, a `{name}` entry pointing at
+ * the node's `inputs` array (which carries the `link`). The conversion has to
+ * resolve each wired slot back to `[sourceNodeId, sourceSlotIndex]`, which is
+ * what the API format expects.
+ *
+ * Widget values cannot be recovered without `/object_info`, and nodes that are
+ * bypassed or belong to a muted group must not be converted at all. Both cases
+ * raise, because a half-converted graph fails deeper inside ComfyUI with a far
+ * less useful message.
+ *
+ * @param graph - a UI-format workflow (has `nodes` and `links`).
+ * @param specs - the `/object_info` map, used to name widget values. When it is
+ * omitted the conversion only succeeds for graphs whose nodes carry no widget
+ * values at all, which is never the case for a real workflow; pass it.
+ * @returns the equivalent API-format graph.
+ */
+export function toApiGraph(graph, specs = null) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
+  const links = Array.isArray(graph?.links) ? graph.links : []
+  if (nodes.length === 0) throw new Error('工作流里没有节点，无法转换。')
+  const byId = new Map()
+  for (const link of links) {
+    if (!Array.isArray(link) || link.length < 5) continue
+    byId.set(link[0], { from: String(link[1]), fromSlot: Number(link[2]) })
+  }
+  const excluded = new Set()
+  for (const node of nodes) {
+    if (node?.mode === 4 || node?.mode === 2) excluded.add(String(node.id))
+    if (isMuted(graph, node)) excluded.add(String(node.id))
+  }
+  const api = {}
+  for (const node of nodes) {
+    if (node === null || typeof node !== 'object') continue
+    const id = String(node.id ?? '')
+    if (id === '' || excluded.has(id)) continue
+    const classType = typeof node.type === 'string' ? node.type : ''
+    if (classType === '') throw new Error('工作流里有节点缺少 type，无法转换。')
+    if (classType === 'Note' || classType === 'PrimitiveNode' || classType === 'Reroute') continue
+    const inputs = {}
+    const slots = Array.isArray(node.inputs) ? node.inputs : []
+    for (const slot of slots) {
+      if (!slot || typeof slot !== 'object') continue
+      const name = typeof slot.name === 'string' ? slot.name : ''
+      if (name === '') continue
+      const link = byId.get(slot.link)
+      if (!link) continue
+      if (excluded.has(link.from)) {
+        throw new Error('转换「' + classType + '」时遇到一条来自已禁用节点的连线，请先在工作流里清理。')
+      }
+      inputs[name] = [link.from, link.fromSlot]
+    }
+    const values = node.widgets_values
+    if (values !== undefined) {
+      if (!Array.isArray(values)) {
+        throw new Error('无法读取「' + classType + '」的控件值，请把该工作流用 ComfyUI 的「导出（API 格式）」另存一份。')
+      }
+      const names = specs === null ? null : widgetNamesFor(classType, specs)
+      if (names === null) {
+        throw new Error('缺少「' + classType + '」的节点定义，无法转换；请改用 ComfyUI 的「导出（API 格式）」另存一份工作流。')
+      }
+      for (let index = 0; index < names.length && index < values.length; index += 1) {
+        if (!(names[index] in inputs)) inputs[names[index]] = values[index]
+      }
+    }
+    api[id] = { class_type: classType, inputs }
+  }
+  if (Object.keys(api).length === 0) throw new Error('工作流里没有可以转换的节点。')
+  return api
+}
+
+/**
+ * Decide whether a node sits inside a muted group.
+ *
+ * @param graph - the UI graph, for its `groups`.
+ * @param node - one node of that graph.
+ * @returns true when the node's group is muted.
+ */
+function isMuted(graph, node) {
+  const groups = Array.isArray(graph?.groups) ? graph.groups : []
+  const bounds = node?.bounding
+  if (!Array.isArray(bounds) || bounds.length < 2) return false
+  const [x, y] = bounds
+  return groups.some((group) => {
+    if (!group || group.muted !== true) return false
+    const b = group.bounding
+    if (!Array.isArray(b) || b.length < 4) return false
+    const [gx, gy, gw, gh] = b
+    return x >= gx && x <= gx + gw && y >= gy && y <= gy + gh
+  })
+}
+
+/**
+ * The widget input names for one node class, in the order the UI stores them.
+ *
+ * A UI node keeps its widget values positionally in `widgets_values`, so the
+ * names have to come from `/object_info`: its `input_order` lists the inputs in
+ * the order the UI shows them, and the ones that are not links are the widgets.
+ * Without the node's definition there is no way to tell which position is
+ * which, so this reports `null` and the caller refuses to guess.
+ *
+ * @param classType - the node's class name.
+ * @param specs - the `/object_info` map, keyed by class name.
+ * @returns the ordered widget names, or null when they are unknown.
+ */
+function widgetNamesFor(classType, specs) {
+  const spec = specs?.[classType]
+  if (!spec || typeof spec !== 'object') return null
+  const order = spec.input_order
+  const names = []
+  if (order && typeof order === 'object') {
+    for (const key of ['required', 'optional']) {
+      for (const name of Array.isArray(order[key]) ? order[key] : []) {
+        if (typeof name !== 'string') continue
+        if (!isWidgetInput(spec.input?.[key]?.[name])) continue
+        names.push(name)
+      }
+    }
+    if (names.length > 0) return names
+  }
+  // Older servers omit `input_order`; fall back to declaration order.
+  for (const key of ['required', 'optional']) {
+    for (const [name, definition] of Object.entries(spec.input?.[key] ?? {})) {
+      if (!isWidgetInput(definition)) continue
+      names.push(name)
+    }
+  }
+  return names
+}
+
+/**
+ * Whether an `/object_info` input is a widget rather than a link.
+ *
+ * A link is declared as a type name (optionally with an options object); a
+ * dropdown is declared as the list of choices itself, which is why an array in
+ * first position means a widget.
+ */
+function isWidgetInput(definition) {
+  if (!Array.isArray(definition) || definition.length === 0) return false
+  const [type] = definition
+  if (Array.isArray(type)) return true
+  if (typeof type !== 'string') return false
+  return !LINK_TYPES.has(type)
+}
+
+/** Input types that are wired between nodes rather than typed by hand. */
+const LINK_TYPES = new Set([
+  'MODEL', 'CLIP', 'VAE', 'CONDITIONING', 'LATENT', 'IMAGE', 'MASK', 'CONTROL_NET',
+  'UPSCALE_MODEL', 'STYLE_MODEL', 'CLIP_VISION', 'GLIGEN', 'AUDIO', 'SAMPLER', 'SIGMAS',
+  'NOISE', 'GUIDER', 'PIPE_LINE', 'MODEL_PATCH', 'WEIGHTS', '*',
+])
+
+/**
+ * Locate the text encoder a sampler's conditioning input resolves to.
+ * @param api - an API-format graph.
+ * @param samplerId - the id of the sampler node.
+ * @param key - either `positive` or `negative`.
+ * @returns the node id holding that conditioning, or null.
+ */
+function resolveConditioning(api, samplerId, key) {
+  const node = api[samplerId]
+  if (!node || typeof node.inputs !== 'object') return null
+  const reference = node.inputs[key]
+  if (!Array.isArray(reference) || reference.length < 1) return null
+  const [id] = reference
+  const target = api[String(id)]
+  if (!target || typeof target !== 'object' || !TEXT_ENCODE_CLASSES.includes(String(target.class_type))) return null
+  return String(id)
+}
+
+/**
+ * Write the prompt and negative prompt into an API-format graph.
+ *
+ * The positive/negative text encoders are found by following the sampler's
+ * `positive`/`negative` links, which is what the visible wiring in the UI
+ * already expresses. When a graph has no recognisable sampler — some workflows
+ * build conditioning through subgraph or custom nodes — the first two text
+ * encoders in id order are used instead, and the caller is told which strategy
+ * was used so the UI can say so honestly.
+ *
+ * Every seed input found is re-rolled so repeated runs of the same workflow
+ * differ, which is what a user pressing "run" twice expects.
+ *
+ * @param api - an API-format graph; it is mutated in place.
+ * @param prompt - the positive prompt text.
+ * @param negative - the negative prompt text; empty means leave it alone.
+ * @returns a description of how the prompt was placed.
+ */
+export function applyPrompt(api, prompt, negative) {
+  const encoders = Object.keys(api)
+    .filter((id) => TEXT_ENCODE_CLASSES.includes(String(api[id]?.class_type)))
+    .sort((left, right) => Number(left) - Number(right))
+  let strategy = 'fallback'
+  let positiveId = null
+  let negativeId = null
+  const samplers = Object.keys(api).filter((id) => SAMPLER_CLASSES.includes(String(api[id]?.class_type)))
+  for (const samplerId of samplers) {
+    const positive = resolveConditioning(api, samplerId, 'positive')
+    const negativeRef = resolveConditioning(api, samplerId, 'negative')
+    if (positive && (negativeRef || negative === '')) {
+      positiveId = positive
+      negativeId = negativeRef
+      strategy = 'sampler'
+      break
+    }
+  }
+  if (positiveId === null) {
+    positiveId = encoders[0] ?? null
+    negativeId = encoders[1] ?? null
+  }
+  if (positiveId !== null) {
+    const node = api[positiveId]
+    node.inputs = { ...(node.inputs ?? {}), text: prompt }
+  }
+  if (negative !== '' && negativeId !== null) {
+    const node = api[negativeId]
+    node.inputs = { ...(node.inputs ?? {}), text: negative }
+  }
+  let seeds = 0
+  for (const node of Object.values(api)) {
+    if (!node || typeof node.inputs !== 'object') continue
+    if ('seed' in node.inputs || 'noise_seed' in node.inputs) {
+      const key = 'seed' in node.inputs ? 'seed' : 'noise_seed'
+      node.inputs = { ...node.inputs, [key]: randomSeed() }
+      seeds += 1
+    }
+  }
+  return { strategy, positiveId, negativeId, seeds }
+}
+
+/** A seed in ComfyUI's range. */
+function randomSeed() {
+  return Math.floor(Math.random() * 0xffffffffffff)
+}
+
+/**
+ * Set the image a workflow should start from.
+ *
+ * ComfyUI's stock graph loads an initial image through `LoadImage`, whose
+ * `image` input is a file name inside its own input directory, so the reference
+ * is uploaded first and only the name is written here.
+ *
+ * @param api - an API-format graph; mutated in place.
+ * @param name - the uploaded file name.
+ * @returns true when a loader was found and written.
+ */
+export function applyInitImage(api, name) {
+  let written = false
+  for (const node of Object.values(api)) {
+    if (!node || typeof node.inputs !== 'object') continue
+    if (String(node.class_type) !== 'LoadImage') continue
+    if (!('image' in node.inputs)) continue
+    node.inputs = { ...node.inputs, image: name }
+    written = true
+  }
+  return written
+}
+
+/** The base URL of a ComfyUI server, without a trailing slash. */
+export function comfyBaseUrl(value) {
+  const raw = String(value ?? '').trim().replace(/\/+$/, '')
+  if (raw === '') return 'http://127.0.0.1:8188'
+  let parsed
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error('ComfyUI 地址不是有效的 URL：' + raw)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('ComfyUI 地址必须是 http(s) URL：' + raw)
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error('ComfyUI 地址不能带用户名和密码：' + raw)
+  }
+  return raw
+}
+
+/**
+ * List the workflows ComfyUI has saved for its default user.
+ *
+ * `GET /v2/userdata?path=workflows` answers with a mixed list of files and
+ * directories; only files ending in `.json` are workflows. Older builds only
+ * have `GET /userdata?dir=workflows`, which answers with plain relative paths,
+ * so that shape is accepted too.
+ *
+ * @param baseUrl - the ComfyUI base URL.
+ * @param timeoutMs - optional overall budget.
+ * @returns `{ workflows, degraded }`, each workflow `{ name, path }`.
+ */
+export async function listWorkflows(baseUrl, timeoutMs = CATALOG_TIMEOUT_MS) {
+  const url = comfyBaseUrl(baseUrl)
+  const entries = await readUserDataList(url, timeoutMs)
+  const workflows = entries
+    .filter((entry) => typeof entry.path === 'string' && entry.path.toLowerCase().endsWith('.json'))
+    .filter((entry) => entry.type !== 'dir')
+    .map((entry) => ({ name: displayName(entry), path: entry.path }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  return { workflows }
+}
+
+/** A short label for a workflow entry, from its path when it has no name. */
+function displayName(entry) {
+  const raw = typeof entry.name === 'string' && entry.name !== '' ? entry.name : String(entry.path ?? '')
+  return raw.replace(/\.json$/i, '')
+}
+
+/**
+ * Read the user-data listing, trying the newer structured route first.
+ *
+ * @param baseUrl - the ComfyUI base URL.
+ * @param timeoutMs - overall budget.
+ * @returns a list of `{ name, path, type }`.
+ */
+async function readUserDataList(baseUrl, timeoutMs) {
+  const structured = await getJson(baseUrl + '/v2/userdata?path=' + encodeURIComponent(WORKFLOWS_DIR), timeoutMs)
+  if (structured.ok) {
+    const parsed = structured.data
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({ name: String(entry.name ?? ''), path: String(entry.path ?? entry.name ?? ''), type: String(entry.type ?? 'file') }))
+    }
+  }
+  if (structured.status === 404 || structured.status === 400 || structured.status === undefined) {
+    const legacy = await getJson(baseUrl + '/userdata?dir=' + encodeURIComponent(WORKFLOWS_DIR), timeoutMs)
+    if (legacy.ok && Array.isArray(legacy.data)) {
+      return legacy.data
+        .filter((entry) => typeof entry === 'string')
+        .map((entry) => ({ name: entry, path: entry, type: 'file' }))
+    }
+    if (!legacy.ok) throw new Error(describeHttpFailure(legacy, '读取 ComfyUI 工作流列表'))
+  }
+  throw new Error(describeHttpFailure(structured, '读取 ComfyUI 工作流列表'))
+}
+
+/**
+ * Read one saved workflow and normalise it to API format.
+ *
+ * @param baseUrl - the ComfyUI base URL.
+ * @param path - the workflow path as reported by {@link listWorkflows}.
+ * @param timeoutMs - optional overall budget.
+ * @returns `{ graph, converted }`, where `converted` records whether a
+ * UI-to-API conversion was needed.
+ */
+export async function readWorkflow(baseUrl, path, timeoutMs = CATALOG_TIMEOUT_MS) {
+  const url = comfyBaseUrl(baseUrl)
+  const target = String(path ?? '')
+  if (target === '') throw new Error('缺少工作流路径')
+  if (target.includes('..')) throw new Error('工作流路径不合法：' + target)
+  const response = await getJson(url + '/userdata/' + target.split('/').map(encodeURIComponent).join('/'), timeoutMs)
+  if (!response.ok) throw new Error(describeHttpFailure(response, '读取工作流文件'))
+  const parsed = response.data
+  if (!parsed || typeof parsed !== 'object') throw new Error('工作流文件不是有效的 JSON 对象')
+  if (isApiFormat(parsed)) return { graph: parsed, converted: false }
+  if (Array.isArray(parsed?.nodes) || Array.isArray(parsed?.links)) {
+    const specs = await readObjectInfo(url, timeoutMs)
+    return { graph: toApiGraph(parsed, specs), converted: true }
+  }
+  throw new Error('无法识别的工作流格式：既不是 API 格式，也不是带 nodes/links 的 UI 格式。')
+}
+
+/**
+ * Read ComfyUI's node definitions, which name every widget input.
+ *
+ * The response is large, but the conversion needs it and it is a local call. A
+ * failure is not fatal: the caller can still convert a graph whose nodes have
+ * no widget values, and gets a clearer error otherwise.
+ *
+ * @param url - the ComfyUI base URL.
+ * @param timeoutMs - overall budget.
+ * @returns the `/object_info` map, or null when it could not be read.
+ */
+async function readObjectInfo(url, timeoutMs) {
+  const response = await getJson(url + '/object_info', Math.max(timeoutMs, 30000))
+  if (!response.ok || !response.data || typeof response.data !== 'object') return null
+  return response.data
+}
+
+/**
+ * Run one workflow and return the images it produced.
+ *
+ * The reference image, when there is one, is uploaded to ComfyUI's input
+ * directory first, because that is what `LoadImage` reads. The prompt is then
+ * queued, and this call polls `/history/{promptId}` until the run leaves the
+ * queue — there is no websocket here, and polling is the documented
+ * HTTP-only completion check.
+ *
+ * @param input - `{ baseUrl, graph, timeoutMs, signal }`.
+ * @returns `{ images, promptId, elapsedMs }`, each image `{ data, mediaType, name }`.
+ */
+export async function runWorkflow(input) {
+  const url = comfyBaseUrl(input.baseUrl)
+  const timeoutMs = Number(input.timeoutMs) > 0 ? Number(input.timeoutMs) : COMFY_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
+  const clientId = 'dsh-' + String(randomSeed())
+  const promptId = 'dsh-' + String(randomSeed()) + '-' + String(Date.now())
+  const payload = { prompt: input.graph, client_id: clientId, prompt_id: promptId }
+  const queued = await postJson(url + '/prompt', payload, Math.min(30000, timeoutMs))
+  if (!queued.ok) {
+    throw new Error('ComfyUI 拒绝了排队请求：' + String(queued.data?.error ?? queued.text ?? '').slice(0, 500))
+  }
+  // ComfyUI reports a rejected graph with HTTP 200 and an `error` body, so the
+  // status alone is not enough: without this check every validation failure
+  // looks like a successful queue and the run hangs until the poll times out.
+  const nodeErrors = queued.data?.node_errors ?? {}
+  const failingNodes = Object.keys(nodeErrors).filter((id) => Boolean(nodeErrors[id]))
+  const message = queued.data?.error ?? null
+  if (message !== null || failingNodes.length > 0) {
+    const detail = typeof message === 'string' || message === null
+      ? message
+      : message.message ?? JSON.stringify(message)
+    const nodes = failingNodes.join(', ')
+    throw new Error(
+      'ComfyUI 拒绝了这个工作流：' + String(detail ?? nodes).slice(0, 500) +
+      (nodes === '' ? '' : '（问题节点：' + nodes + '）'),
+    )
+  }
+  const history = await waitForHistory(url, promptId, deadline, input.signal)
+  const images = []
+  for (const [nodeId, output] of Object.entries(history?.outputs ?? {})) {
+    for (const image of Array.isArray(output?.images) ? output.images : []) {
+      if (!image || typeof image.filename !== 'string') continue
+      const bytes = await downloadView(url, image)
+      if (bytes === null) continue
+      images.push({ data: bytes, mediaType: mediaTypeFor(image.filename), name: image.filename, nodeId })
+    }
+  }
+  return { images, promptId, elapsedMs: timeoutMs - (deadline - Date.now()) }
+}
+
+/**
+ * Poll `/history/{promptId}` until the run finishes or the budget runs out.
+ *
+ * @param url - the ComfyUI base URL.
+ * @param promptId - the id used to queue the prompt.
+ * @param deadline - absolute epoch milliseconds.
+ * @param signal - optional abort signal from the caller.
+ * @returns the history entry for that prompt.
+ */
+async function waitForHistory(url, promptId, deadline, signal) {
+  for (;;) {
+    if (signal?.aborted) throw new Error('已取消')
+    const response = await getJson(url + '/history/' + encodeURIComponent(promptId), 15000)
+    if (response.ok && response.data && typeof response.data === 'object') {
+      const entry = response.data[promptId]
+      if (entry && typeof entry === 'object') {
+        const status = entry.status ?? {}
+        if (status.status_str === 'error' || status.failed === true) {
+          const messages = Array.isArray(status.messages) ? status.messages : []
+          const detail = messages
+            .map((item) => (Array.isArray(item) ? item.join(' ') : String(item)))
+            .join(' ')
+            .slice(0, 500)
+          throw new Error('ComfyUI 运行失败：' + (detail || '工作流返回了错误状态。'))
+        }
+        if (status.completed === true || status.status_str === 'success' || entry.outputs !== undefined) {
+          return entry
+        }
+      }
+    }
+    if (Date.now() >= deadline) throw new Error('等待 ComfyUI 完成超时。')
+    await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())))
+  }
+}
+
+/** Read one produced image through `/view`. */
+async function downloadView(url, image) {
+  const params = new URLSearchParams({
+    filename: String(image.filename ?? ''),
+    subfolder: String(image.subfolder ?? ''),
+    type: String(image.type ?? 'output'),
+  })
+  try {
+    const response = await fetch(url + '/view?' + params.toString(), {
+      redirect: 'error',
+      signal: AbortSignal.timeout(VIEW_TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) return null
+    const buffer = await response.arrayBuffer()
+    if (buffer.byteLength === 0) return null
+    return new Uint8Array(buffer)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Upload one image into ComfyUI's input directory.
+ *
+ * ComfyUI's `/upload/image` takes a multipart body with an `image` field plus
+ * the target `subfolder` and `type`, and answers with the name it stored the
+ * file under — which is what `LoadImage` later references.
+ *
+ * @param input - `{ baseUrl, data, mediaType, name, timeoutMs }`.
+ * @returns `{ name, subfolder }`.
+ */
+export async function uploadImage(input) {
+  const url = comfyBaseUrl(input.baseUrl)
+  const form = new FormData()
+  const blob = new Blob([input.data], { type: String(input.mediaType ?? 'image/png') })
+  form.append('image', blob, String(input.name ?? 'reference.png'))
+  form.append('subfolder', String(input.subfolder ?? ''))
+  form.append('type', 'input')
+  form.append('overwrite', 'true')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS)
+  try {
+    const response = await fetch(url + '/upload/image', { method: 'POST', body: form, signal: controller.signal })
+    const text = await response.text()
+    if (!response.ok) throw new Error('上传参考图失败：HTTP ' + String(response.status) + ' ' + text.slice(0, 300))
+    let parsed
+    try { parsed = JSON.parse(text) } catch { parsed = undefined }
+    const name = typeof parsed?.name === 'string' ? parsed.name : ''
+    if (name === '') throw new Error('上传参考图失败：ComfyUI 没有返回文件名。')
+    return { name, subfolder: typeof parsed?.subfolder === 'string' ? parsed.subfolder : '' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** A cheap liveness check, so the UI can explain a dead server. */
+export async function checkConnection(baseUrl) {
+  const url = comfyBaseUrl(baseUrl)
+  const response = await getJson(url + '/system_stats', 8000)
+  return { ok: response.ok, status: response.status }
+}
+
+/** One GET that tolerates a non-JSON or failing answer. */
+async function getJson(url, timeoutMs) {
+  try {
+    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) })
+    const text = await response.text()
+    let data
+    try { data = JSON.parse(text) } catch { data = undefined }
+    return { ok: response.ok, status: response.status, data, text }
+  } catch (error) {
+    return { ok: false, status: undefined, data: undefined, error }
+  }
+}
+
+/** One JSON POST. */
+async function postJson(url, body, timeoutMs) {
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const text = await response.text()
+    let data
+    try { data = JSON.parse(text) } catch { data = undefined }
+    return { ok: response.ok, status: response.status, data, text }
+  } catch (error) {
+    return { ok: false, status: undefined, data: undefined, error }
+  }
+}
+
+/** A human-readable reason for a failed ComfyUI HTTP call. */
+function describeHttpFailure(response, action) {
+  if (response?.error instanceof Error) {
+    const aborted = response.error.name === 'AbortError' || response.error.name === 'TimeoutError'
+    return aborted
+      ? action + '超时：ComfyUI 没有在限定时间内响应。'
+      : action + '失败：无法连接 ComfyUI，请确认它已启动，且地址填写正确。'
+  }
+  return action + '失败：HTTP ' + String(response?.status ?? '无响应')
+}
+
+/** Await a number of milliseconds. */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** The media type implied by a ComfyUI file name. */
+function mediaTypeFor(name) {
+  const lowered = String(name ?? '').toLowerCase()
+  if (lowered.endsWith('.jpg') || lowered.endsWith('.jpeg')) return 'image/jpeg'
+  if (lowered.endsWith('.webp')) return 'image/webp'
+  if (lowered.endsWith('.gif')) return 'image/gif'
+  return 'image/png'
+}

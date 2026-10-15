@@ -1,0 +1,7 @@
+# 部署快照：deploy-local.ps1 每次部署都会在本目录留一份带时间戳的备份
+deployment-backups/
+
+# 依赖与临时产物
+node_modules/
+*.log
+.tmp-*

@@ -1,0 +1,76 @@
+{
+  "name": "dsh-image-studio",
+  "version": "0.10.1",
+  "description": "Image generation studio for DeepSeek Harness — a gallery plus a workbench that switches between text-to-image, image-to-image and a local ComfyUI workflow, previews a multi-image batch, picks the model from the service's own catalog and the workflow from the user's own ComfyUI, calls OpenAI-compatible, Google, Seedream, DashScope, xAI or Zhipu image APIs directly, exposes the ComfyUI run to the conversation as a tool that can hand the produced picture back to the model, and keeps every credential in the host.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check:build": "node build.mjs --check",
+    "test": "node build.mjs --check && node test-image-api.mjs && node test-studio-model.mjs && node test-client.mjs && node test-auth.mjs && node test-host.mjs && node test-tool.mjs && node test-bridge.mjs && node test-bridge-route.mjs",
+    "prepack": "node build.mjs"
+  },
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/image-api.js",
+    "lib/comfy.js",
+    "lib/tool.js",
+    "lib/client.js",
+    "lib/conversation-host.js",
+    "lib/bridge.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0 <5",
+    "react": ">=18.2.0 <19"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "image-generation",
+    "image-studio",
+    "text2img",
+    "img2img",
+    "comfyui",
+    "openai-compatible",
+    "gemini",
+    "seedream",
+    "dashscope",
+    "xai",
+    "zhipu"
+  ]
+}

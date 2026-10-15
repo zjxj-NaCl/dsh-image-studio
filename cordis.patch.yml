@@ -1,0 +1,12 @@
+# Bundle patch for dsh-image-studio.
+#
+# The host half registers its same-origin /image-studio routes on webServer and
+# calls image APIs directly, resolving the credential through the host
+# credential service. The embedded LLM config and assistant reuse those same
+# routes against the project Agent. One row is enough; the browser half is
+# discovered through this package's `dsh.client` declaration.
+- insert:
+    - id: image-studio
+      name: dsh-image-studio
+      config:
+        provider: openai-compat
