@@ -1,12 +1,12 @@
 {
   "name": "dsh-image-studio",
-  "version": "0.10.1",
-  "description": "Image generation studio for DeepSeek Harness — a gallery plus a workbench that switches between text-to-image, image-to-image and a local ComfyUI workflow, previews a multi-image batch, picks the model from the service's own catalog and the workflow from the user's own ComfyUI, calls OpenAI-compatible, Google, Seedream, DashScope, xAI or Zhipu image APIs directly, exposes the ComfyUI run to the conversation as a tool that can hand the produced picture back to the model, and keeps every credential in the host.",
+  "version": "0.11.0",
+  "description": "Image generation studio for DeepSeek Harness: a gallery and a workbench for text-to-image, image-to-image and local ComfyUI workflows, calling OpenAI-compatible, Google, Seedream, DashScope, xAI and Zhipu image APIs directly while the host keeps every credential.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
     "check:build": "node build.mjs --check",
-    "test": "node build.mjs --check && node test-image-api.mjs && node test-studio-model.mjs && node test-client.mjs && node test-auth.mjs && node test-host.mjs && node test-tool.mjs && node test-bridge.mjs && node test-bridge-route.mjs",
+    "test": "node build.mjs --check && node test-image-api.mjs && node test-studio-model.mjs && node test-client.mjs && node test-auth.mjs && node test-host.mjs && node test-tool.mjs && node test-bridge.mjs && node test-bridge-route.mjs && node test-package.mjs",
     "prepack": "node build.mjs"
   },
   "main": "lib/index.js",
@@ -27,9 +27,14 @@
     "lib/client.js",
     "lib/conversation-host.js",
     "lib/bridge.js",
+    "src",
+    "build.mjs",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "INSTALL.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "test-*.mjs"
   ],
   "dsh": {
     "bundle": {
@@ -55,6 +60,17 @@
     "node": ">=22.19.0"
   },
   "license": "MIT",
+  "author": {
+    "name": "zjxj-NaCl"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zjxj-NaCl/dsh-image-studio.git"
+  },
+  "homepage": "https://github.com/zjxj-NaCl/dsh-image-studio#readme",
+  "bugs": {
+    "url": "https://github.com/zjxj-NaCl/dsh-image-studio/issues"
+  },
   "keywords": [
     "deepseek",
     "deepseek-harness",

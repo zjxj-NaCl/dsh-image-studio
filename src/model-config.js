@@ -139,6 +139,11 @@ export function ModelConfigPanel() {
       h('span', { className: 'cis-hint' },
         '列表读自 ComfyUI 自己保存工作流的目录。选中「ComfyUI 工作流」生成方式时必填；UI 格式的工作流会自动转换后提交，读不到时也可以手工填写文件名。'),
       ws.workflowsError ? h('span', { className: 'cis-warn' }, ws.workflowsError) : null),
+    field('Agent 地址（可选）', form.agentBaseUrl, (value) => Model.workspace.setField('agentBaseUrl', value), {
+      disabled: locked,
+      placeholder: 'http://127.0.0.1:8080',
+      hint: '「LLM 服务配置」与「生图助手」把请求转发到这里（对方需要提供 /v1/llm/config 等路由）。留空则用 http://127.0.0.1:8080；不用这两个页签就不必填。密钥只从环境变量 DSH_IMAGE_STUDIO_AGENT_API_KEY 读取，面板不保存也不回显。',
+    }),
     h('div', { className: 'cis-row' },
       h('label', { className: 'cis-field' }, h('span', { className: 'cis-label' }, '密钥引用名'),
         h('input', { className: 'cis-input', value: form.keyRef, disabled: locked,

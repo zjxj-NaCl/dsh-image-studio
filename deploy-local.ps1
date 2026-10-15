@@ -1,11 +1,17 @@
+# Maintenance helper for this repository: copy the built plugin over the copy
+# that a local harness profile loads from. Ordinary users do not need this file
+# -- they install the package with `dsh plugin`, as described in INSTALL.md.
 param(
-  [string]$InstallRoot = 'C:\Users\ZJXJ_NaCl\.dsh\plugins\dsh-image-studio'
+  [string]$InstallRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $packageRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
-if (!(Test-Path -LiteralPath $InstallRoot)) { throw "Install target directory does not exist: $InstallRoot" }
+if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { throw 'USERPROFILE is not set; pass -InstallRoot explicitly.' }
+$expectedRoot = Join-Path $env:USERPROFILE '.dsh\plugins\dsh-image-studio'
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) { $InstallRoot = $expectedRoot }
+if (!(Test-Path -LiteralPath $InstallRoot)) { throw "Install target directory does not exist: $InstallRoot (create it first, or pass -InstallRoot <profiles dir>\dsh-image-studio)" }
 $installedRoot = (Resolve-Path -LiteralPath $InstallRoot).Path
-if ($installedRoot -ne 'C:\Users\ZJXJ_NaCl\.dsh\plugins\dsh-image-studio') { throw 'Only the inspected local plugin directory is supported.' }
+if (![string]::Equals($installedRoot, $expectedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Only the harness plugin directory is supported (expected: $expectedRoot)." }
 $item = Get-Item -LiteralPath $installedRoot -Force
 if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installed plugin must be a regular directory, not a link.' }
 $sourceManifest = Get-Content -LiteralPath (Join-Path $packageRoot 'package.json') -Raw | ConvertFrom-Json
@@ -22,9 +28,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Build is stale.' }
 $relativeFiles = @(
   'lib\index.js', 'lib\image-api.js', 'lib\comfy.js', 'lib\tool.js', 'lib\client.js', 'lib\conversation-host.js', 'lib\bridge.js',
   'src\index.js', 'src\image-api.js', 'src\comfy.js', 'src\tool.js', 'src\studio-model.js', 'src\client.js', 'src\model-config.js', 'src\conversation-host.js', 'src\bridge.js',
-  'build.mjs', 'cordis.patch.yml', 'LICENSE', 'package.json', 'README.md',
+  'build.mjs', 'cordis.patch.yml', 'LICENSE', 'package.json', 'README.md', 'INSTALL.md', 'CHANGELOG.md',
   'test-image-api.mjs', 'test-studio-model.mjs', 'test-client.mjs', 'test-auth.mjs', 'test-host.mjs', 'test-tool.mjs',
-  'test-bridge.mjs', 'test-bridge-route.mjs', 'test-host-inject.mjs'
+  'test-bridge.mjs', 'test-bridge-route.mjs', 'test-host-inject.mjs', 'test-package.mjs'
 )
 $entries = foreach ($relative in $relativeFiles) {
   $source = [IO.Path]::GetFullPath((Join-Path $packageRoot $relative))
@@ -48,7 +54,7 @@ $entries = foreach ($relative in $relativeFiles) {
   }
   [pscustomobject]@{ Relative = $relative; Source = $source; Target = $target; Exists = ($null -ne $targetItem) }
 }
-if (@($entries).Count -ne 30) { throw 'Unexpected deployment target count.' }
+if (@($entries).Count -ne 33) { throw 'Unexpected deployment target count.' }
 $bridgeTarget = Join-Path $installedRoot 'lib\bridge.js'
 if ((Test-Path -LiteralPath $bridgeTarget) -and (Get-FileHash -LiteralPath $bridgeTarget).Hash -ne (Get-FileHash -LiteralPath (Join-Path $packageRoot 'lib\bridge.js')).Hash) { throw 'Installed conversation bridge changed since inspection; stop for review.' }
 $backupRoot = Join-Path $packageRoot ('deployment-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -67,5 +73,5 @@ foreach ($entry in $entries) {
   Copy-Item -LiteralPath $entry.Source -Destination $entry.Target -Force
   if ((Get-FileHash -LiteralPath $entry.Source).Hash -ne (Get-FileHash -LiteralPath $entry.Target).Hash) { throw "Deployment verification failed: $($entry.Relative)" }
 }
-Write-Output "Updated 30 exact plugin artifacts. Original files backed up at: $backupRoot"
+Write-Output "Updated 33 exact plugin artifacts. Original files backed up at: $backupRoot"
 Write-Output 'Restart DSH and the project Agent to activate. No process was stopped and no workflow was changed.'
