@@ -1,0 +1,38 @@
+# 与本地同一条验证链：lib/ 必须与 src/ 同步，整套测试必须全绿。
+# 不需要 npm install —— 本包零运行时依赖，也没有锁文件，所以不跑 npm ci。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: lib/ 必须与 src/ 同步
+        run: node build.mjs --check
+
+      - name: 全部测试
+        run: npm test
+
+      # 别人拿到的是 tarball，所以真正要证明的是「解包之后自己还能测」。
+      - name: 打包产物必须自足
+        run: |
+          npm pack
+          mkdir -p "$RUNNER_TEMP/tarball"
+          tar -xzf dsh-image-studio-*.tgz -C "$RUNNER_TEMP/tarball"
+          cd "$RUNNER_TEMP/tarball/package"
+          npm test

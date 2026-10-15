@@ -20,7 +20,7 @@
 
 1. 打开 **设置 → 插件**。
 2. 点 **添加插件**，在输入框里填下列任一形式：
-   - **离线包绝对路径**：`C:\path\to\dsh-image-studio-0.11.0.tgz`（或在 macOS / Linux 上 `/path/to/dsh-image-studio-0.11.0.tgz`）
+   - **离线包绝对路径**：`C:\path\to\dsh-image-studio-0.11.1.tgz`（或在 macOS / Linux 上 `/path/to/dsh-image-studio-0.11.1.tgz`）
    - **Git 地址**：`https://github.com/zjxj-NaCl/dsh-image-studio.git`
    - **包名**：`dsh-image-studio`（仅在发布到 registry 之后才有意义；中国大陆可在「安装源」里选国内镜像）
 3. 确认安装。安装失败时对话框会给出原因；连不上 GitHub 时会提供「改用国内镜像」。
@@ -30,7 +30,7 @@
 
 ```sh
 # 离线 tarball
-dsh plugin --profile web add ./dsh-image-studio-0.11.0.tgz
+dsh plugin --profile web add ./dsh-image-studio-0.11.1.tgz
 # 发布到 registry 之后
 dsh plugin --profile web add dsh-image-studio
 # 直接指向源码目录（开发用）
@@ -46,10 +46,12 @@ dsh plugin --profile web add "link:C:\path\to\dsh-image-studio"
 git clone https://github.com/zjxj-NaCl/dsh-image-studio.git dsh-image-studio
 cd dsh-image-studio
 npm test          # 不需要网络，也不需要装 DSH
-npm pack          # 得到 dsh-image-studio-0.11.0.tgz
+npm pack          # 得到 dsh-image-studio-0.11.1.tgz
 ```
 
 拿到 tarball 后按路线 A 或 B 安装。`src/` 是可读源码，`lib/` 是构建产物（由 `npm run build` 生成，不要手改）。
+
+> Windows PowerShell 默认禁止运行 `npm.ps1`（ExecutionPolicy），若 `npm` 报“禁止运行脚本”，把命令里的 `npm` 换成 `npm.cmd` 即可；`node` 不受影响。
 
 ## 安装后：让面板能出图
 
@@ -92,6 +94,8 @@ npm pack          # 得到 dsh-image-studio-0.11.0.tgz
 | ComfyUI 模式报「缺少「X」的节点定义」 | 工作流是 UI 格式，而 ComfyUI 没导出该节点的定义 | 在 ComfyUI 里用「导出（API 格式）」另存一份工作流再选它 |
 | 安装时提示无法访问 GitHub | 网络 | 改用国内镜像源，或用离线 tarball |
 | 安装被拒绝，错误码 `incompatible-version` | 本包声明的 DSH peer 与目标运行时不符 | 换用匹配的 DSH 版本；确认理解风险后，才用 `dsh plugin --profile <name> allow-version <pkg@ver> --dsh-version <runtime> --accept-risk` 加豁免 |
+
+上表都没解决：按 [issue 模板](.github/ISSUE_TEMPLATE/bug_report.md) 里要的信息（DSH 版本、插件版本、图像服务、复现步骤）开一个 [issue](https://github.com/zjxj-NaCl/dsh-image-studio/issues)。**贴之前先去掉密钥、token 和你的私有服务地址。** 安全类问题不要开公开 issue，走 [SECURITY.md](SECURITY.md) 的私密通道。
 
 ## 安全
 

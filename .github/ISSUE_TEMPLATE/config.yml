@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安装、配置与排错
+    url: https://github.com/zjxj-NaCl/dsh-image-studio/blob/main/INSTALL.md
+    about: 三条安装路线、装后配置、环境变量、卸载升级、常见故障，先看这份。
+  - name: 安全问题（不要开公开 issue）
+    url: https://github.com/zjxj-NaCl/dsh-image-studio/security/advisories/new
+    about: 密钥外泄、路径穿越、跨站写这类问题请走私密通道，见 SECURITY.md。

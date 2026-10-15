@@ -2,6 +2,26 @@
 
 写法参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.1] - 2026-10-15
+
+只动仓库与文档，插件代码一行没改：把云端首页和「别人怎么参与」补齐。随包发布的文档集也跟着变了，所以按 patch 升版本。
+
+### 新增
+
+- **`README.en.md`**：中文 README 的英文镜像；两份 README 互相链接，`test-package.mjs` 会检查这一点，也会检查它写对了当前 tarball 名。
+- **GitHub Actions CI**（`.github/workflows/test.yml`）：`ubuntu-latest` + Node 22 上跑 `node build.mjs --check` → `npm test`，再 `npm pack`、把 tarball 解到新目录**重跑一遍 `npm test`**——用别人真正拿到的那个包自证自足。
+- **`CONTRIBUTING.md`**：环境、常用命令、源码/产物约定（`lib/` 不可手改、`build.mjs` 的声明限制）、测试入口、密钥纪律、提 PR 清单。
+- **`SECURITY.md`**：私密报告通道、会被受理的问题类型（密钥外泄、路径穿越、跨站写、越权读、上游地址被劫持）、明确**不算**漏洞的设计边界、密钥存放方式。
+- **`.github/` 模板**：问题反馈模板（带环境表与自查清单）、功能建议模板（带影响面勾选）、`config.yml` 联系入口、PR 模板清单。
+- README 顶部加徽章（CI / release / license / node / 零运行时依赖）与中英切换导航；正文新增「界面」与「常见问题」两节。
+
+### 变更
+
+- README 的安装段改写为可照做的三步（拿包 → 装并重启 → 配），命令统一写成跨平台的 `npm`（Windows PowerShell 若禁止运行 `npm.ps1`，改用 `npm.cmd`，`INSTALL.md` 里已注明）。
+- README 末尾新增「贡献与安全」「许可证」两节，指向 `CONTRIBUTING.md`、`SECURITY.md` 与 `LICENSE`。
+- `package.json`：`files` 追加 `README.en.md`，版本升到 `0.11.1`。
+- `test-package.mjs` 新增两项断言（中英文 README 互链、CI 覆盖构建检查与整套测试），并把 `CONTRIBUTING.md` / `SECURITY.md` / `.github/` 纳入「不得进 tarball」的清单。测试合计 200 → **202 项**。
+
 ## [0.11.0] - 2026-10-15
 
 面向「别人也能直接部署」的一次整理：补上安装文档与打包自检，去掉所有作者本机专属的路径，并让面板数据跟着 `DSH_HOME` 走。

@@ -1,5 +1,13 @@
 # DSH 生图工作台（dsh-image-studio）
 
+[English](README.en.md) · [安装](INSTALL.md) · [变更记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md) · [安全策略](SECURITY.md)
+
+[![test](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml/badge.svg)](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/tag/zjxj-NaCl/dsh-image-studio?label=release)](https://github.com/zjxj-NaCl/dsh-image-studio/tags)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A522.19-339933.svg)](package.json)
+[![runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen.svg)](package.json)
+
 > 给 DeepSeek Harness 用的生图插件：文生图、图生图、本机 ComfyUI 工作流三种方式，配一个画廊、一个工作台与一块模型配置面板。密钥由宿主解析并交给 DSH 凭据存储保管，浏览器从头到尾不接触密钥。
 
 能做什么：
@@ -13,6 +21,8 @@
 
 装：[INSTALL.md](INSTALL.md)（桌面版图形界面 / `dsh plugin` 命令行 / 离线 tarball 三条路线）。许可：MIT。
 
+## 界面
+
 DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 - **生图画廊**（`image-studio-gallery`，order 50）：列出本面板生成过的全部图片，可全屏查看、删除。
@@ -20,17 +30,15 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 宿主半在 `webServer` 上注册同源前缀路由 `/image-studio`，**由宿主解析密钥、直接按服务方 HTTP 契约请求、并把结果写入本地画廊**。前两种模式不经过项目 Agent；「ComfyUI 工作流」模式也不经过——宿主直接对本机 ComfyUI 发 HTTP：从它自己保存工作流的目录读列表，向它排队提示词，再把它产出的图片复制进面板画廊。浏览器既不接触图像服务密钥，也不接触 Agent 密钥，因此不涉及 CORS。
 
+> 截图还没放进来。想贡献的话把 PNG 放进仓库的 `docs/` 目录再在这里引用；**上传前先确认图里没有服务地址、模型名、密钥引用名之类的私人信息**——「模型配置」页签里就有前两样。
+
 ## 安装
 
-给别人装的完整步骤（前置条件、三条安装路线、装后配置、环境变量、卸载升级、排错）见 [INSTALL.md](INSTALL.md)。最短路径：
+前置条件、三条安装路线（桌面版图形界面 / `dsh plugin` 命令行 / 源码构建）、装后配置、环境变量、卸载升级与排错表都在 [INSTALL.md](INSTALL.md)。最短路径三步：
 
-```powershell
-npm.cmd pack
-```
-
-得到 `dsh-image-studio-0.11.0.tgz`，在 DSH 的插件管理界面里选这个压缩包安装（也可以填 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或直接指向本仓库目录），然后**重启 DSH**——宿主路由只在启动时注册，只刷新前端不生效。
-
-安装不等于配置。装好后还要在面板的「模型配置」里填服务地址、模型名与密钥；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
+1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.1.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
+2. **装**：在 DSH 的插件管理界面里选这个压缩包（或填上面的 Git 地址 / 本地路径），装完**重启 DSH**——宿主半只在启动时注册路由，只刷新前端不生效。
+3. **配**：在面板的「模型配置」里填服务地址、模型名与密钥。安装不等于配置；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
 
 ## 模型接入
 
@@ -170,13 +178,23 @@ LLM 相关四条路由仍转发给项目 Agent，只服务于「LLM 服务配置
 - 画廊记录只存在宿主磁盘，助手文本记录只存在当前页面内存；关闭页面不取消已发出的图像请求。
 - 生成完成不代表画质合格。请求进行中禁止切换 LLM 配置，配置版本过期须重新读取。
 
+## 常见问题
+
+- **装完没反应、面板打不开？** 宿主那一半只在 DSH 启动时注册路由：**重启一次 DSH**，只刷新浏览器不会加载它。
+- **「读取模型」读不到列表？** 这是便利功能，不是硬依赖。列表来自所选图像服务的模型目录，前提是服务地址与密钥都已保存；读不到就直接手填模型名，生成不受影响。
+- **密钥存在哪？** 值经 `ctx.credentials.set(ref, value)` 进 DSH 凭据存储，插件的 `config.json` 里只有引用名；浏览器从头到尾拿不到密钥值，面板也不回显。升级或卸载不会删除凭据。
+- **要不要联网装依赖？** 不要。零运行时依赖，宿主直接按各家 HTTP 契约发请求，也没有需要编译的原生模块。
+- **ComfyUI 模式连不上？** 确认本机 ComfyUI 的端口与面板「ComfyUI 地址」一致（默认 `http://127.0.0.1:8188`）、`user/default/workflows/` 里确有 `.json` 工作流；报「缺少「X」的节点定义」时，请在 ComfyUI 里改用「导出（API 格式）」另存一份。细节见 [INSTALL.md](INSTALL.md) 的排错表。
+- **能一次生成多张吗？** 一次最多 4 张、逐张串行；部分失败会保留成功的图，并在预览框下方给出失败原因。
+- **支持哪些服务？** OpenAI、Google、Seedream、DashScope、xAI、智谱，以及任意 OpenAI 兼容地址，见下面的「模型接入」。
+
 ## 开发
 
 在 `packages/dsh-image-studio` 目录执行：
 
 ```powershell
-npm.cmd run build
-npm.cmd test
+npm run build
+npm test
 ```
 
 可读源码在 `src`，DSH 加载 `lib`；不要手改 `lib`。`build.mjs --check` 会拒绝不同步的产物。
@@ -203,7 +221,7 @@ npm.cmd test
 | `test-tool.mjs` | 对话工具的输出/附件 schema、参数裁剪、回图与降级（附件保存失败或返回空 id 时只回文字摘要）、画廊摘要不含图片字节、耗时取整、render 的 text/image 块、`resolveDefineTool()` 只能是 function 或 null |
 | `test-host.mjs` | 全部宿主路由（含 `/models`、`/comfy/workflows`）、穿越名、同源守卫、请求体上限、`mode` 分流（generations vs edits、缺参考图 400、无 `mode` 回落）、批量生成的成功/夹紧/部分失败/全失败，以及 ComfyUI 直连链路（stub ComfyUI：userdata 列表与 legacy 回退、上传参考图 → `/prompt` → `/history` → `/view` → 把产物复制进画廊、HTTP 200 拒绝 bodies、执行报错原文回传、无图结果、本地校验不打 ComfyUI） |
 | `test-bridge.mjs` / `test-bridge-route.mjs` | 旧对话半的留存回归 |
-| `test-package.mjs` | 发布面：`files` 白名单覆盖全部构建产物与源码、`main`/`exports`/`dsh.bundle.patch` 指向的文件确实会被别人拿到、`cordis.patch.yml` 只挂载本包一次、版本在 `package.json` 与 `CHANGELOG.md` 里一致、`repository`/`homepage`/`bugs` 是可点击的真实地址、已发布的文本文件里既没有本机绝对路径也没有待替换的仓库占位符 |
+| `test-package.mjs` | 发布面：`files` 白名单覆盖全部构建产物与源码、`main`/`exports`/`dsh.bundle.patch` 指向的文件确实会被别人拿到、`cordis.patch.yml` 只挂载本包一次、版本在 `package.json` 与 `CHANGELOG.md` 里一致、`repository`/`homepage`/`bugs` 是可点击的真实地址、中英文两份 README 互链、CI 覆盖构建检查与整套测试、已发布的文本文件里既没有本机绝对路径也没有待替换的仓库占位符 |
 
 真实 Cordis 兼容测试（需要 DSH 依赖，不在 `npm test` 内）：
 
@@ -217,8 +235,19 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 
 ## 本轮验证
 
-`npm.cmd test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 42 项、`test-host.mjs` 42 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-package.mjs` 16 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 200 项）。
+`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 42 项、`test-host.mjs` 42 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 202 项）。
 
-发布形态也验过一次：`npm.cmd pack` 出的 `dsh-image-studio-0.11.0.tgz` 内恰好 33 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。
+发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.1.tgz` 内恰好 34 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
 
 尚未验收的部分：真实图像服务调用与画质（本插件未发送真实图像 API 请求），以及**真实 ComfyUI 端到端**——`/comfy/workflows` 与 `/comfy/generate` 只在 stub ComfyUI 下测过（改到直连方案时本机没有任何监听端口，ComfyUI 与项目 Agent 都没启动）。真机需要确认三件事：ComfyUI 的 `--listen`/端口与面板「ComfyUI 地址」一致；它的 `user/default/workflows/` 里确有 `.json` 工作流；UI 格式的工作流能被 `toApiGraph` 转换（转换依赖 `/object_info` 里该节点的 `input_order`，自定义节点包若没有导出这两个顺序就转换不了，此时请在 ComfyUI 里用「导出（API 格式）」另存一份）。UI→API 转换与提示词真正落到哪个节点也值得先拿一张简单的工作流试：面板会说明它用的是 KSampler 链接还是顺序回落（`note`）。
+
+## 贡献与安全
+
+- 想在本地改：开发环境、源码/产物约定、测试入口与提 PR 的清单见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 发现安全问题（密钥外泄、路径穿越、跨站写等）：**不要开公开 issue**，按 [SECURITY.md](SECURITY.md) 走私密通道。
+- 只是想提问题或建议：直接开 [issue](https://github.com/zjxj-NaCl/dsh-image-studio/issues)，模板会提示该带上哪些环境信息。
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 zjxj-NaCl

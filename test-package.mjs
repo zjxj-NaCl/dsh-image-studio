@@ -6,7 +6,8 @@
  * the `files` allowlist drifting away from the build output, a `dsh` or
  * `exports` target that points at a file nobody ships, a version that appears
  * in three places but only two agree, an author-local absolute path landing in
- * a published document, and a repository placeholder shipping to readers.
+ * a published document, a repository placeholder shipping to readers, and the
+ * reader-facing surface (English README, CI) quietly falling behind the code.
  *
  *   node packages/dsh-image-studio/test-package.mjs
  */
@@ -76,7 +77,7 @@ const SOURCES = [
   'src/studio-model.js', 'src/model-config.js', 'src/conversation-host.js', 'src/bridge.js',
 ]
 
-const DOCUMENTS = ['README.md', 'INSTALL.md', 'CHANGELOG.md', 'LICENSE']
+const DOCUMENTS = ['README.md', 'README.en.md', 'INSTALL.md', 'CHANGELOG.md', 'LICENSE']
 
 const TEXT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.txt', '.ps1']
 
@@ -187,11 +188,15 @@ test('the published set carries the test suite', () => {
 })
 
 test('maintenance-only files stay out of the tarball', () => {
-  for (const file of ['deploy-local.ps1', 'PUBLISH.md', 'package-lock.json', 'node_modules']) {
+  for (const file of [
+    'deploy-local.ps1', 'PUBLISH.md', 'CONTRIBUTING.md', 'SECURITY.md',
+    'package-lock.json', 'node_modules',
+  ]) {
     assert.ok(!published.has(file), 'should not be published: ' + file)
   }
   for (const file of published) {
     assert.ok(!file.startsWith('deployment-backups/'), 'a deployment backup would be published: ' + file)
+    assert.ok(!file.startsWith('.github/'), 'CI and templates belong to the repository, not the tarball: ' + file)
     assert.ok(!file.includes('.tmp-'), 'a scratch file would be published: ' + file)
   }
 })
@@ -208,6 +213,37 @@ test('README points a first-time installer at the install document', () => {
   const readme = read('README.md')
   assert.match(readme, /INSTALL\.md/, 'README.md must link INSTALL.md')
   assert.match(readme, /##\s*安装/)
+})
+
+test('an English README mirrors the Chinese one', () => {
+  assert.ok(published.has('README.en.md'), 'README.en.md is not published: the registry page would show Chinese only')
+  const english = read('README.en.md')
+  assert.ok(english.length > 1000, 'README.en.md looks truncated')
+  assert.match(read('README.md'), /README\.en\.md/, 'the Chinese README must link the English one')
+  assert.match(english, /README\.md/, 'the English README must link back to the Chinese one')
+  assert.match(
+    english,
+    new RegExp('dsh-image-studio-' + manifest.version.replace(/\./g, '\\.') + '\\.tgz'),
+    'the English README must name the current tarball, not a stale version',
+  )
+})
+
+test('CI runs the build check and the whole suite', () => {
+  const workflowPath = '.github/workflows/test.yml'
+  // CI config is maintenance-only and deliberately left out of the tarball, so
+  // inside an extracted package there is nothing to read — only the "did not
+  // ship" half still applies.
+  assert.ok(!published.has(workflowPath), 'CI config must not ship inside the tarball')
+  if (!existsSync(join(root, workflowPath))) return
+  const workflow = read(workflowPath)
+  assert.match(workflow, /actions\/checkout@/)
+  assert.match(workflow, /actions\/setup-node@/)
+  assert.match(workflow, /node-version:\s*'22'/)
+  assert.match(workflow, /node build\.mjs --check/)
+  assert.match(workflow, /npm test/)
+  // The point of CI here is the artifact a stranger installs, so it must also
+  // repack and re-test from the extracted tarball.
+  assert.match(workflow, /npm pack/)
 })
 
 test('no published file leaks one machine absolute path', () => {
