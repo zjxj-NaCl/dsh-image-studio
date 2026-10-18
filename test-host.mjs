@@ -127,7 +127,9 @@ const comfy = http.createServer((req, res) => {
         return
       }
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ prompt_id: parsed?.prompt_id ?? '', number: 1, node_errors: {} }))
+      // Real ComfyUI mints the queue id; the plugin no longer sends one, so the
+      // stub has to answer with an id of its own for the poll to follow.
+      res.end(JSON.stringify({ prompt_id: parsed?.prompt_id ?? 'stub-prompt-id', number: 1, node_errors: {} }))
       return
     }
     if (url.pathname.startsWith('/history/')) {

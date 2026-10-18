@@ -1,0 +1,385 @@
+/**
+ * Unit tests for the direct ComfyUI client.
+ *
+ * These pin the details that only show up against a real server:
+ *  - a workflow in a subfolder has to be fetched with its slashes encoded;
+ *  - `widgets_values` is positional, and the UI stores a control box after some
+ *    seeds that is not an input at all;
+ *  - custom node sockets must never be mistaken for widgets;
+ *  - the queue id is minted by ComfyUI, not by us.
+ *
+ *   node packages/dsh-image-studio/test-comfy.mjs
+ */
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+
+import { listWorkflows, runWorkflow, toApiGraph, readWorkflow } from './src/comfy.js'
+
+const cases = []
+const test = (name, fn) => { cases.push({ name, fn }) }
+
+/** Start a stub ComfyUI, run the body against its URL, then stop it again. */
+async function withComfy(handler, body) {
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url })
+    const parsed = new URL(req.url, 'http://127.0.0.1')
+    handler(parsed, req, res)
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = 'http://127.0.0.1:' + String(server.address().port)
+  try {
+    return await body(base, requests)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+}
+
+/** An `/object_info` entry built from an ordered list of `[name, definition]`. */
+function spec(entries, extra = {}) {
+  const required = {}
+  for (const [name, definition] of entries) required[name] = definition
+  return {
+    input_order: { required: entries.map(([name]) => name) },
+    input: { required, ...extra },
+  }
+}
+
+const LINK = (type) => [type]
+const INT = (options = {}) => ['INT', { default: 0, min: 0, max: 100, step: 1, ...options }]
+const FLOAT = () => ['FLOAT', { default: 0.5, min: 0, max: 1, step: 0.01 }]
+const TEXT = () => ['STRING', { default: '' }]
+const CHOICES = (values) => [values, {}]
+const BOOL = () => ['BOOLEAN', { default: true }]
+
+/** A UI-format node, with the links it consumes listed as input slots. */
+function uiNode(id, type, inputs, widgets) {
+  return {
+    id,
+    type,
+    inputs: inputs.map(([name, link]) => ({ name, link })),
+    widgets_values: widgets,
+  }
+}
+
+/** A link tuple: [id, fromNode, fromSlot, toNode, toSlot, type]. */
+const link = (id, from, fromSlot, to, toSlot, type = '*') => [id, from, fromSlot, to, toSlot, type]
+
+// --- reading a workflow file -------------------------------------------------
+
+/** The smallest workflow that eadWorkflow accepts: API format already. */
+const API_ONLY_WORKFLOW = { 1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'model.safetensors' } } }
+
+test('a workflow in a subfolder is fetched with its slashes encoded', async () => {
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(API_ONLY_WORKFLOW))
+  }, async (base, requests) => {
+    await readWorkflow(base, 'workflows/anime style SDXL.json')
+    assert.equal(requests.length, 1)
+    assert.equal(
+      requests[0].url,
+      '/userdata/workflows%2Fanime%20style%20SDXL.json',
+      'the whole path must travel as one encoded segment',
+    )
+  })
+})
+
+test('a server that wants real slashes is retried once', async () => {
+  await withComfy((url, req, res) => {
+    if (url.pathname.startsWith('/userdata/workflows/')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(API_ONLY_WORKFLOW))
+      return
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end('{"error":"no such file"}')
+  }, async (base, requests) => {
+    await readWorkflow(base, 'workflows/a.json')
+    assert.deepEqual(requests.map((entry) => entry.url), [
+      '/userdata/workflows%2Fa.json',
+      '/userdata/workflows/a.json',
+    ])
+  })
+})
+
+test('a missing workflow is reported as a readable failure', async () => {
+  await withComfy((url, req, res) => {
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end('{"error":"no such file"}')
+  }, async (base) => {
+    await assert.rejects(
+      () => readWorkflow(base, 'nope.json'),
+      (error) => /读取工作流文件/.test(String(error.message)) && /404/.test(String(error.message)),
+    )
+  })
+})
+
+test('run records and edit backups stay out of the picker', async () => {
+  // A real workflows/ folder collected 47 `.before-…` backups and 19
+  // `metadata.json` records next to 36 runnable workflows; none of the former
+  // can be queued, so the list must not offer them.
+  const entries = [
+    { name: 'anime style SDXL.json', path: 'workflows/anime style SDXL.json', type: 'file' },
+    { name: 'anime style SDXL.before-active-hand-lora-v12-3-20260829-103919.json', path: 'workflows/anime style SDXL.before-active-hand-lora-v12-3-20260829-103919.json', type: 'file' },
+    { name: 'metadata.json', path: 'workflows/FLUX/metadata.json', type: 'file' },
+    { name: '构图', path: 'workflows/FLUX', type: 'dir' },
+    { name: 'A01', path: 'workflows/FLUX/A01.json', type: 'file' },
+  ]
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(entries))
+  }, async (base) => {
+    const listed = await listWorkflows(base)
+    assert.deepEqual(listed.workflows.map((entry) => entry.path), [
+      'workflows/FLUX/A01.json',
+      'workflows/anime style SDXL.json',
+    ])
+  })
+})
+// --- UI to API conversion ----------------------------------------------------
+
+const KSAMPLER_SPEC = spec([
+  ['model', LINK('MODEL')],
+  ['seed', INT({ control_after_generate: true })],
+  ['steps', INT()],
+  ['cfg', FLOAT()],
+  ['sampler_name', CHOICES(['euler', 'dpmpp_2m'])],
+  ['scheduler', CHOICES(['normal', 'karras'])],
+  ['positive', LINK('CONDITIONING')],
+  ['negative', LINK('CONDITIONING')],
+  ['latent_image', LINK('LATENT')],
+  ['denoise', FLOAT()],
+])
+
+const KSAMPLER_NODE = uiNode(7, 'KSampler', [
+  ['model', 1],
+  ['positive', 2],
+  ['negative', 3],
+  ['latent_image', 4],
+], [101, 'randomize', 20, 7, 'dpmpp_2m', 'karras', 1])
+
+function samplerGraph(specs, values) {
+  return {
+    nodes: [
+      uiNode(1, 'CheckpointLoaderSimple', [], ['model.safetensors']),
+      uiNode(2, 'CLIPTextEncode', [['clip', 5]], ['a prompt']),
+      uiNode(3, 'CLIPTextEncode', [['clip', 5]], ['a negative']),
+      uiNode(4, 'EmptyLatentImage', [], [512, 512, 1]),
+      uiNode(5, 'CLIPSetLastLayer', [['clip', 6]], ['-1']),
+      uiNode(6, 'CheckpointLoaderSimple', [], ['model.safetensors']),
+      { ...KSAMPLER_NODE, widgets_values: values },
+      uiNode(8, 'VAEDecode', [['samples', 7], ['vae', 9]], []),
+      uiNode(9, 'VAELoader', [], ['vae.safetensors']),
+    ],
+    links: [
+      link(1, 1, 0, 7, 0, 'MODEL'),
+      link(2, 2, 0, 7, 1, 'CONDITIONING'),
+      link(3, 3, 0, 7, 2, 'CONDITIONING'),
+      link(4, 4, 0, 7, 3, 'LATENT'),
+      link(5, 6, 1, 5, 0, 'CLIP'),
+      link(6, 6, 0, 2, 0, 'CLIP'),
+    ],
+  }
+}
+
+const MINIMAL_SPECS = {
+  KSampler: KSAMPLER_SPEC,
+  CheckpointLoaderSimple: spec([
+    ['ckpt_name', CHOICES(['model.safetensors'])],
+  ]),
+  CLIPTextEncode: spec([['clip', LINK('CLIP')], ['text', TEXT()]]),
+  CLIPSetLastLayer: spec([['clip', LINK('CLIP')], ['stop_at_clip_layer', INT()]]),
+  EmptyLatentImage: spec([['width', INT()], ['height', INT()], ['batch_size', INT()]]),
+  VAEDecode: spec([['samples', LINK('LATENT')], ['vae', LINK('VAE')]]),
+  VAELoader: spec([['vae_name', CHOICES(['vae.safetensors'])]]),
+}
+
+test('the control box after a seed is not read as steps', () => {
+  const api = toApiGraph(samplerGraph(MINIMAL_SPECS, [101, 'randomize', 20, 7, 'dpmpp_2m', 'karras', 1]), MINIMAL_SPECS)
+  assert.equal(api['7'].inputs.seed, 101)
+  assert.equal(api['7'].inputs.steps, 20, 'steps must not pick up the randomize box')
+  assert.equal(api['7'].inputs.cfg, 7)
+  assert.equal(api['7'].inputs.sampler_name, 'dpmpp_2m')
+  assert.equal(api['7'].inputs.scheduler, 'karras')
+  assert.equal(api['7'].inputs.denoise, 1)
+})
+
+test('a graph saved without the control box still lines up', () => {
+  const api = toApiGraph(samplerGraph(MINIMAL_SPECS, [101, 20, 7, 'dpmpp_2m', 'karras', 1]), MINIMAL_SPECS)
+  assert.equal(api['7'].inputs.seed, 101)
+  assert.equal(api['7'].inputs.steps, 20)
+  assert.equal(api['7'].inputs.denoise, 1)
+})
+
+test('an undeclared control box after a seed is stepped over', () => {
+  // Impact's DetailerForEach takes a seed but never declares
+  // `control_after_generate`; the UI still stores the box, and the values after
+  // it must not slide into the wrong inputs.
+  const detailer = spec([
+    ['image', LINK('IMAGE')],
+    ['segs', LINK('SEGS')],
+    ['model', LINK('MODEL')],
+    ['clip', LINK('CLIP')],
+    ['vae', LINK('VAE')],
+    ['guide_size', FLOAT()],
+    ['guide_size_for', BOOL()],
+    ['max_size', FLOAT()],
+    ['seed', INT()],
+    ['steps', INT()],
+    ['cfg', FLOAT()],
+    ['sampler_name', CHOICES(['euler', 'dpmpp_2m_sde'])],
+    ['scheduler', CHOICES(['normal', 'karras'])],
+    ['positive', LINK('CONDITIONING')],
+    ['negative', LINK('CONDITIONING')],
+    ['denoise', FLOAT()],
+  ])
+  const graph = {
+    nodes: [
+      { id: 77, type: 'DetailerForEach', inputs: [], widgets_values: [1280, true, 1280, 525154665039234, 'fixed', 16, 4, 'dpmpp_2m_sde', 'karras', 0.12] },
+    ],
+    links: [],
+  }
+  const api = toApiGraph(graph, { DetailerForEach: detailer })
+  assert.equal(api['77'].inputs.guide_size, 1280)
+  assert.equal(api['77'].inputs.guide_size_for, true)
+  assert.equal(api['77'].inputs.max_size, 1280)
+  assert.equal(api['77'].inputs.seed, 525154665039234)
+  assert.equal(api['77'].inputs.steps, 16, 'steps must not become the control box')
+  assert.equal(api['77'].inputs.sampler_name, 'dpmpp_2m_sde')
+  assert.equal(api['77'].inputs.denoise, 0.12)
+})
+
+test('a custom socket type is a link, not a widget', () => {
+  // `BBOX_DETECTOR` is not one of the primitive widget types, so it must be
+  // dropped from the widget list rather than swallowing the first value.
+  const detector = spec([
+    ['bbox_detector', LINK('BBOX_DETECTOR')],
+    ['image', LINK('IMAGE')],
+    ['threshold', FLOAT()],
+    ['dilation', INT()],
+    ['crop_factor', FLOAT()],
+    ['drop_size', INT()],
+    ['labels', TEXT()],
+  ])
+  const graph = {
+    nodes: [
+      uiNode(74, 'BboxDetectorSEGS', [['bbox_detector', 1], ['image', 2]].map(([name, id]) => [name, id]), [0.35, 56, 2.15, 10, 'all']),
+    ],
+    links: [link(1, 73, 0, 74, 0, 'BBOX_DETECTOR'), link(2, 9, 0, 74, 1, 'IMAGE')],
+  }
+  const api = toApiGraph(graph, { BboxDetectorSEGS: detector })
+  assert.deepEqual(api['74'].inputs.bbox_detector, ['73', 0])
+  assert.deepEqual(api['74'].inputs.image, ['9', 0])
+  assert.equal(api['74'].inputs.threshold, 0.35)
+  assert.equal(api['74'].inputs.dilation, 56)
+  assert.equal(api['74'].inputs.crop_factor, 2.15)
+  assert.equal(api['74'].inputs.drop_size, 10)
+  assert.equal(api['74'].inputs.labels, 'all')
+})
+
+// --- queueing ----------------------------------------------------------------
+
+const API_WORKFLOW = {
+  1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'model.safetensors' } },
+  2: { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1], text: 'a prompt' } },
+ 9: { class_type: 'VAEDecode', inputs: { samples: ['7', 0], vae: ['1', 2] } },
+}
+
+/** A stub that accepts a queue and reports one finished picture. */
+function happyComfy(promptId = 'minted-id') {
+  return (url, req, res) => {
+    if (url.pathname === '/prompt') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ prompt_id: promptId, number: 1, node_errors: {} }))
+      return
+    }
+    if (url.pathname.startsWith('/history/')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        [decodeURIComponent(url.pathname.slice('/history/'.length))]: {
+          status: { status_str: 'success', completed: true },
+          outputs: { 9: { images: [{ filename: 'out.png', subfolder: '', type: 'output' }] } },
+        },
+      }))
+      return
+    }
+    if (url.pathname === '/view') {
+      res.writeHead(200, { 'Content-Type': 'image/png' })
+      res.end(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  }
+}
+
+test('the queue id comes from ComfyUI, not from us', async () => {
+  await withComfy(happyComfy('f2589047-015f-493b-95eb-5a168838282f'), async (base, requests) => {
+    const result = await runWorkflow({ baseUrl: base, graph: API_WORKFLOW, timeoutMs: 10000 })
+    assert.equal(result.promptId, 'f2589047-015f-493b-95eb-5a168838282f')
+    const posted = requests.filter((entry) => entry.url === '/prompt')
+    assert.equal(posted.length, 1)
+  })
+})
+
+test('a rejected graph is explained without printing an object', async () => {
+  await withComfy((url, req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      error: { type: 'prompt_outputs_failed_validation', message: 'Prompt outputs failed validation', details: '' },
+      node_errors: { 14: { errors: [{ message: 'Value not in list', details: "scheduler: 'karras' not in a list" }] } },
+    }))
+  }, async (base) => {
+    await assert.rejects(
+      () => runWorkflow({ baseUrl: base, graph: API_WORKFLOW, timeoutMs: 10000 }),
+      (error) => {
+        assert.ok(!/\[object Object\]/.test(String(error.message)), 'must never print [object Object]')
+        assert.match(String(error.message), /Prompt outputs failed validation/)
+        assert.match(String(error.message), /scheduler: 'karras' not in a list/)
+        return true
+      },
+    )
+  })
+})
+
+test('a queue answer without an id fails instead of polling forever', async () => {
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ number: 1, node_errors: {} }))
+  }, async (base) => {
+    await assert.rejects(
+      () => runWorkflow({ baseUrl: base, graph: API_WORKFLOW, timeoutMs: 5000 }),
+      /没有返回排队编号/,
+    )
+  })
+})
+
+test('a finished run hands back the picture it produced', async () => {
+  await withComfy(happyComfy(), async (base) => {
+    const result = await runWorkflow({ baseUrl: base, graph: API_WORKFLOW, timeoutMs: 10000 })
+    assert.equal(result.images.length, 1)
+    assert.equal(result.images[0].name, 'out.png')
+    assert.equal(result.images[0].mediaType, 'image/png')
+    assert.deepEqual([...result.images[0].data], [0x89, 0x50, 0x4e, 0x47])
+  })
+})
+
+// --- runner ------------------------------------------------------------------
+
+const failures = []
+for (const { name, fn } of cases) {
+  try {
+    await fn()
+    console.log('  ok   ' + name)
+  } catch (error) {
+    console.log('  FAIL ' + name + '  ' + String(error?.message ?? error))
+    failures.push(name)
+  }
+}
+
+if (failures.length > 0) {
+  console.log('\n' + String(failures.length) + ' FAILURE(S): ' + failures.join(', '))
+  process.exit(1)
+}
+console.log('\nThe ComfyUI client reads, converts and queues the way a real server expects.')

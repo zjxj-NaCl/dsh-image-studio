@@ -1,12 +1,12 @@
 {
   "name": "dsh-image-studio",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Image generation studio for DeepSeek Harness: a gallery and a workbench for text-to-image, image-to-image and local ComfyUI workflows, calling OpenAI-compatible, Google, Seedream, DashScope, xAI and Zhipu image APIs directly while the host keeps every credential.",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
     "check:build": "node build.mjs --check",
-    "test": "node build.mjs --check && node test-image-api.mjs && node test-studio-model.mjs && node test-client.mjs && node test-auth.mjs && node test-host.mjs && node test-tool.mjs && node test-bridge.mjs && node test-bridge-route.mjs && node test-package.mjs",
+    "test": "node build.mjs --check && node test-image-api.mjs && node test-studio-model.mjs && node test-client.mjs && node test-auth.mjs && node test-comfy.mjs && node test-host.mjs && node test-tool.mjs && node test-bridge.mjs && node test-bridge-route.mjs && node test-package.mjs",
     "prepack": "node build.mjs"
   },
   "main": "lib/index.js",

@@ -2,6 +2,23 @@
 
 写法参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.3] - 2026-10-18
+
+真机联调一轮：接上本机真实的 ComfyUI 后暴露了四个协议细节，全部修掉，现在从生成界面选工作流、跑、看图整条链路实测通过。
+
+### 修复
+
+- **子目录里的工作流读不出来（404）**：真实 ComfyUI 的 user-data 路由在 `workflows/` 下只认**整条路径一次编码**（斜杠也编码成 `%2F`），按段编码一律 404；而 `/v2/userdata?path=` 对文件返回 `Requested path is not a directory`。改为先用整条路径编码读取，仅在 404 时回退旧的分段写法。
+- **KSampler 的采样器和降噪权重错位**：`widgets_values` 是按位置存的，UI 在 seed 之后还多存一个 `control_after_generate`（"randomize" / "fixed"）控制框，它不是节点输入。症状是采样器读成序号、`denoise` 读到 `karras`。现在按 `control_after_generate` 声明插入占位并在转换时跳过，同时按值的类型做一次跳步（Impact 的 `DetailerForEach` 有 seed 却不声明这个控制框）。
+- **自定义 socket 被当成控件**：原来用「已知连线类型」黑名单判断，`BBOX_DETECTOR` 这类第三方类型不在名单里，于是 `BboxDetectorSEGS` 把 `bbox_detector` 当控件，后面的 `threshold` / `dilation` 整体串位。改为「已知控件类型」白名单（`INT` / `FLOAT` / `STRING` / `BOOLEAN` / `COMBO`），未知类型一律视为连线。
+- **排队编号**：真实 ComfyUI 不再接受调用方自带 `prompt_id`（要求规范小写 UUID），现在只发 `{ prompt, client_id }`，取服务端返回的 `prompt_id` 去轮询；没返回编号时直接报错而不是空转。
+- **任务被拒时只显示 `[object Object]`**：新增 `promptRejection`，把 `error.message` / `error.details` 与 `node_errors` 里最多三个问题节点的说明拼成一行中文提示。
+
+### 变更
+
+- 工作流下拉不再把 `metadata.json`（运行记录）与 `<名字>.before-*`（脚本备份）当成工作流：本机 102 个 `.json` 里 47 个备份 + 19 个记录，过滤后正好 36 个可用工作流。
+- 新增 `test-comfy.mjs`（12 项）：路径编码与 404 回退、seed 后控制框（含未声明）的对齐、自定义 socket、服务端排队编号、拒绝文案、列表过滤。测试合计 208 → **220 项**。
+- `test-host.mjs` 的 ComfyUI stub 改为自己生成排队编号（与真实服务端一致）。
 ## [0.11.2] - 2026-10-18
 
 「ComfyUI 工作流」这一屏不再依赖「模型配置」：地址与工作流就放在提示词上方，填地址、读列表、选工作流，直接运行。

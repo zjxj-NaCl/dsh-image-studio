@@ -30,7 +30,7 @@ $relativeFiles = @(
   'src\index.js', 'src\image-api.js', 'src\comfy.js', 'src\tool.js', 'src\studio-model.js', 'src\client.js', 'src\model-config.js', 'src\conversation-host.js', 'src\bridge.js',
   'build.mjs', 'cordis.patch.yml', 'LICENSE', 'package.json', 'README.md', 'README.en.md', 'INSTALL.md', 'CHANGELOG.md',
   'test-image-api.mjs', 'test-studio-model.mjs', 'test-client.mjs', 'test-auth.mjs', 'test-host.mjs', 'test-tool.mjs',
-  'test-bridge.mjs', 'test-bridge-route.mjs', 'test-host-inject.mjs', 'test-package.mjs'
+  'test-bridge.mjs', 'test-bridge-route.mjs', 'test-comfy.mjs', 'test-host-inject.mjs', 'test-package.mjs'
 )
 $entries = foreach ($relative in $relativeFiles) {
   $source = [IO.Path]::GetFullPath((Join-Path $packageRoot $relative))
@@ -54,7 +54,7 @@ $entries = foreach ($relative in $relativeFiles) {
   }
   [pscustomobject]@{ Relative = $relative; Source = $source; Target = $target; Exists = ($null -ne $targetItem) }
 }
-if (@($entries).Count -ne 34) { throw 'Unexpected deployment target count.' }
+if (@($entries).Count -ne 35) { throw 'Unexpected deployment target count.' }
 $bridgeTarget = Join-Path $installedRoot 'lib\bridge.js'
 if ((Test-Path -LiteralPath $bridgeTarget) -and (Get-FileHash -LiteralPath $bridgeTarget).Hash -ne (Get-FileHash -LiteralPath (Join-Path $packageRoot 'lib\bridge.js')).Hash) { throw 'Installed conversation bridge changed since inspection; stop for review.' }
 $backupRoot = Join-Path $packageRoot ('deployment-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -73,5 +73,5 @@ foreach ($entry in $entries) {
   Copy-Item -LiteralPath $entry.Source -Destination $entry.Target -Force
   if ((Get-FileHash -LiteralPath $entry.Source).Hash -ne (Get-FileHash -LiteralPath $entry.Target).Hash) { throw "Deployment verification failed: $($entry.Relative)" }
 }
-Write-Output "Updated 34 exact plugin artifacts. Original files backed up at: $backupRoot"
+Write-Output "Updated 35 exact plugin artifacts. Original files backed up at: $backupRoot"
 Write-Output 'Restart DSH and the project Agent to activate. No process was stopped and no workflow was changed.'

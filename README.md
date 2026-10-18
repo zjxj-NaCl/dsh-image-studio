@@ -36,7 +36,7 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 前置条件、三条安装路线（桌面版图形界面 / `dsh plugin` 命令行 / 源码构建）、装后配置、环境变量、卸载升级与排错表都在 [INSTALL.md](INSTALL.md)。最短路径三步：
 
-1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.2.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
+1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.3.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
 2. **装**：在 DSH 的插件管理界面里选这个压缩包（或填上面的 Git 地址 / 本地路径），装完**重启 DSH**——宿主半只在启动时注册路由，只刷新前端不生效。
 3. **配**：在面板的「模型配置」里填服务地址、模型名与密钥。安装不等于配置；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
 
@@ -219,6 +219,7 @@ npm test
 | `test-client.mjs` | 浏览器半能在 stub React 下渲染、注册四个槽位、并渲染出「生成方式」开关、预览框、生成数量控件与「读取模型」「读取工作流」入口；「图像服务」与「模型」确实坐在同一行，且模型目录的自动读取接线存在 |
 | `test-auth.mjs` | 密钥不外泄、生成入库、逐请求解析凭据 |
 | `test-tool.mjs` | 对话工具的输出/附件 schema、参数裁剪、回图与降级（附件保存失败或返回空 id 时只回文字摘要）、画廊摘要不含图片字节、耗时取整、render 的 text/image 块、`resolveDefineTool()` 只能是 function 或 null |
+| `test-comfy.mjs` | ComfyUI 直连的线格式：子目录工作流要整条路径编码（404 时回退分段编码）、`widgets_values` 里 seed 后的控制框不串位（含未声明的情况）、自定义 socket 不被当成控件、排队编号由服务端生成、拒绝原因不含 `[object Object]`、工作流列表过滤掉 `metadata.json` 与 `.before-*` 备份 |
 | `test-host.mjs` | 全部宿主路由（含 `/models`、`/comfy/workflows`）、穿越名、同源守卫、请求体上限、`mode` 分流（generations vs edits、缺参考图 400、无 `mode` 回落）、批量生成的成功/夹紧/部分失败/全失败，以及 ComfyUI 直连链路（stub ComfyUI：userdata 列表与 legacy 回退、上传参考图 → `/prompt` → `/history` → `/view` → 把产物复制进画廊、HTTP 200 拒绝 bodies、执行报错原文回传、无图结果、本地校验不打 ComfyUI） |
 | `test-bridge.mjs` / `test-bridge-route.mjs` | 旧对话半的留存回归 |
 | `test-package.mjs` | 发布面：`files` 白名单覆盖全部构建产物与源码、`main`/`exports`/`dsh.bundle.patch` 指向的文件确实会被别人拿到、`cordis.patch.yml` 只挂载本包一次、版本在 `package.json` 与 `CHANGELOG.md` 里一致、`repository`/`homepage`/`bugs` 是可点击的真实地址、中英文两份 README 互链、CI 覆盖构建检查与整套测试、已发布的文本文件里既没有本机绝对路径也没有待替换的仓库占位符 |
@@ -235,9 +236,9 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 
 ## 本轮验证
 
-`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 208 项）。
+`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-comfy.mjs` 12 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 220 项）。
 
-发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.2.tgz` 内恰好 34 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
+发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.3.tgz` 内恰好 35 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
 
 尚未验收的部分：真实图像服务调用与画质（本插件未发送真实图像 API 请求），以及**真实 ComfyUI 端到端**——`/comfy/workflows` 与 `/comfy/generate` 只在 stub ComfyUI 下测过（改到直连方案时本机没有任何监听端口，ComfyUI 与项目 Agent 都没启动）。真机需要确认三件事：ComfyUI 的 `--listen`/端口与面板「ComfyUI 地址」一致；它的 `user/default/workflows/` 里确有 `.json` 工作流；UI 格式的工作流能被 `toApiGraph` 转换（转换依赖 `/object_info` 里该节点的 `input_order`，自定义节点包若没有导出这两个顺序就转换不了，此时请在 ComfyUI 里用「导出（API 格式）」另存一份）。UI→API 转换与提示词真正落到哪个节点也值得先拿一张简单的工作流试：面板会说明它用的是 KSampler 链接还是顺序回落（`note`）。
 
