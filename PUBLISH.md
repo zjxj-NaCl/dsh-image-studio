@@ -73,7 +73,7 @@ git push origin --tags
 - 本仓库把构建产物 `lib/` 一起入库：克隆下来即可 `dsh plugin --profile <profile> add "link:<克隆目录>"` 安装，或直接 `npm pack`。使用者不需要先构建，也不需要联网装依赖（本包没有运行时依赖）。
 - 仓库里没有密钥：用户层的 `cordis.patch.yml` 与面板的 `config.json` 都不在仓库内，面板数据在 `<DSH_HOME>/cache/dsh-image-studio/`。
 - `npm pack` 的 `.tgz` 已在 `.gitignore` 里，不会误提交。
-- 在这台机器上 push/pull 必须提权到 `danger-full-access`：沙盒里 Git Credential Manager 起不来（`couldn't create signal pipe`）。凭据由 GCM 提供，`gh` 未登录、也没有 `GH_TOKEN`，所以建仓、建 Release、改 About/Topics 都只能在浏览器里做。
+- 在这台机器上 push/pull 必须提权到 `danger-full-access`：沙盒里 Git Credential Manager 起不来（`couldn't create signal pipe`）。`gh` 未登录、环境里也没有 `GH_TOKEN`，但凭据就存在 GCM 里，`scripts/publish-release.ps1` 会复用它——所以 **Release 可以在命令行直接发**（见第五节）；建仓、改 About/Topics 仍然只能在浏览器里做。
 
 ## 四、发布前检查占位符
 
@@ -89,38 +89,22 @@ Select-String -Path README.md, README.en.md, INSTALL.md, CHANGELOG.md, package.j
 Select-String -Path README.md, README.en.md, INSTALL.md, package.json -Pattern 'dsh-image-studio-\d+\.\d+\.\d+\.tgz'
 ```
 
-## 五、GitHub Release（粘贴用）
+## 五、GitHub Release（一条命令）
 
-Releases 页面点「Draft a new release」，tag 选 **`v0.11.1`**，标题 `v0.11.1`，正文：
+`scripts/publish-release.ps1` 把 `CHANGELOG.md` 里**当前版本那一节**直接发成 Release，并附上 `npm pack` 的 tarball；重复跑只更新正文，不会建第二个：
 
-````md
-只动仓库与文档，插件代码一行没改：把云端首页和「别人怎么参与」补齐。
-
-### 新增
-- 英文 README（`README.en.md`），与中文 README 互链
-- GitHub Actions CI：`node build.mjs --check` → `npm test` → 打包、解包后在新目录再跑一次 `npm test`
-- `CONTRIBUTING.md`、`SECURITY.md`、`.github/` 的 issue 与 PR 模板
-- README 徽章、中英切换导航、「界面」与「常见问题」两节
-
-### 变更
-- README 安装段改写为可照做的三步；命令统一为跨平台的 `npm`
-- `package.json` 的 `files` 追加 `README.en.md`，版本升到 0.11.1
-
-### 安装
-```sh
-npm pack   # 得到 dsh-image-studio-0.11.1.tgz
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-release.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -DryRun   # 只看正文
 ```
 
-在 DSH 的插件管理界面里选这个压缩包（或填 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`），装完**重启 DSH**。
+- **令牌**：先读 `GH_TOKEN` / `GITHUB_TOKEN`；没设就去 `git credential fill` 取 `https://github.com` 已存的那一条——也就是 `git push` 用的同一个，**不需要手动粘贴，脚本也不打印它**。需要 `repo`（classic）或 `Contents: write`（fine-grained）权限。
+- **为什么不用 `curl`**：本机 `curl.exe` 走 schannel，在受限环境里报 `SEC_E_NO_CREDENTIALS`，看着像服务器 403；其实 `api.github.com` 是通的（Node 的 `fetch` 会读 `https_proxy`，`NODE_USE_ENV_PROXY=1` 时自动走系统代理）。列 release、列 tag 这类读接口**完全不需要令牌**：`node -e "fetch('https://api.github.com/zen').then(r=>r.text()).then(console.log)"`。
+- 脚本只读 `CHANGELOG.md` 与 `package.json`，不碰源码；`scripts/` 不在 `files` 白名单里，不会进 tarball。
 
-完整变更见 [CHANGELOG.md](https://github.com/zjxj-NaCl/dsh-image-studio/blob/main/CHANGELOG.md)。
-````
+**手动发布（备用）**：Releases 页面点「Draft a new release」，tag 选当前版本，标题与 body 抄 `CHANGELOG.md` 顶部那一节，附件上传 `npm pack` 的 `.tgz`。
 
-附件（Attach binaries）上传 `dsh-image-studio-0.11.1.tgz`——就是 `npm pack` 的产物，33→34 个文件、解包后自带源码与测试。
-
-- `v0.11.0` 那个 tag 已经推上去了，可以顺手也发一个 Release（正文抄 `CHANGELOG.md` 的 `[0.11.0]` 一节），也可以不发，只留 tag。
-- 发完 Release，`release` 徽章读的还是 tag（不是 Release），两者一致即可。
-
+发完 Release，`release` 徽章读的还是 tag（不是 Release），两者一致即可。
 ## 六、还可以补的
 
 - **截图 / GIF**（还没做）：最能说明问题的是「模型配置」里并排的图像服务与模型（打开面板自动读目录）、三种生成方式的切换、以及画廊。放进仓库的 `docs/` 再在 README 的「界面」一节引用；**上传前先确认图里没有服务地址、模型名、密钥引用名之类的私人信息**。
@@ -137,4 +121,4 @@ npm pack   # 得到 dsh-image-studio-0.11.1.tgz
 - [ ] `npm pack` 重新打过（文档一改就必须重打，否则 tarball 里是旧文档）
 - [ ] tag 指向发布提交，并已 `git push --tags`
 - [ ] GitHub 的 About、Topics 与私密漏洞报告开关按第一节设好
-- [ ] Release 正文与附件（tarball）已发布
+- [ ] Release 已发布：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-release.ps1`（正文取自 CHANGELOG，附件自动挂 tarball）
