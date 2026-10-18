@@ -36,7 +36,7 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 前置条件、三条安装路线（桌面版图形界面 / `dsh plugin` 命令行 / 源码构建）、装后配置、环境变量、卸载升级与排错表都在 [INSTALL.md](INSTALL.md)。最短路径三步：
 
-1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.5.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
+1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.6.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
 2. **装**：在 DSH 的插件管理界面里选这个压缩包（或填上面的 Git 地址 / 本地路径），装完**重启 DSH**——宿主半只在启动时注册路由，只刷新前端不生效。
 3. **配**：在面板的「模型配置」里填服务地址、模型名与密钥。安装不等于配置；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
 
@@ -92,7 +92,7 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 1. 切到 `comfy` 后，面板若尚未读到工作流目录，会用当前地址自动 `GET /comfy/workflows`（宿主查本机 ComfyUI 的 `GET /v2/userdata?path=workflows`，旧版回退 `GET /userdata?dir=workflows`）填下拉。地址栏留空则用面板配置值，再缺省回落到 `http://127.0.0.1:8188`；把它改成别的机器/端口后点「读取工作流」重取即可，请求会带上 `?baseUrl=` 临时覆盖，不必先保存配置。读不到时下拉退回手填框，按文件名写也行。
 2. 在下拉里挑中一个工作流时，面板会立刻把它写进配置（`POST /config/save`），因此「当前工作流」不再只活在界面上：对话工具不传 `workflow` 时用的就是这一个。手填框在失焦时同样保存。
-3. 提交 `POST /comfy/generate`，体为 `{workflow, prompt, negative, reference, baseUrl?}`；`workflow` 可以写下拉里的完整路径（`workflows/x.json`），也可以只写文件名（`x.json`——宿主会先在 `workflows/` 里找，找不到才按原样取），提示词由宿主注入工作流，`baseUrl` 只在这次请求里覆盖地址，`reference` 只有第一张会被采用。
+3. 提交 `POST /comfy/generate`，体为 `{workflow, prompt, negative, reference, baseUrl?}`；`workflow` 可以写下拉里的完整路径（`workflows/x.json`）、子目录里的路径（`子目录/x.json`），也可以只写文件名（`x.json`）；只要不是以 `workflows/` 开头，宿主都会先补前缀去找，找不到才按原样取，提示词由宿主注入工作流，`baseUrl` 只在这次请求里覆盖地址，`reference` 只有第一张会被采用。
 4. 若有参考图：宿主把字节 multipart 上传（`POST /upload/image`，`type=input`、`overwrite=true`），拿到 ComfyUI 返回的文件名，写进图里第一个 `LoadImage` 节点的 `image` 输入框。
 5. 宿主 `POST /prompt` 提交 `{prompt, client_id, prompt_id}`，其中 `prompt` 是注入过提示词的 API 格式图。
 6. 宿主每秒轮询 `GET /history/{prompt_id}`，直到 `outputs` 出现或 `status.status_str` 变成 `error`（超时由宿主 `DEFAULT_GENERATE_TIMEOUT_MS` 控制）。
@@ -165,7 +165,7 @@ LLM 相关四条路由仍转发给项目 Agent，只服务于「LLM 服务配置
 
 除面板之外，插件把「跑一次 ComfyUI 工作流」注册为对话可调用的工具（DSH 的 tools 服务），让对话里写下的提示词直接进 ComfyUI：
 
-- 工具名 `comfyui_generate`，超时 300 秒（`TOOL_TIMEOUT_MS`）。参数只有四个：`prompt`（必填）、`negative`、`workflow`、`baseUrl`；空白项不会进入请求。`workflow` 省略时用面板当前保存的那个（面板选过工作流就会自动保存，所以「界面上选的那个」与「工具默认用的那个」始终一致）；也可以只写文件名，宿主会先在 `workflows/` 里找。`baseUrl` 可临时覆盖面板「ComfyUI 地址」里配置的地址（地址仍须是合法 http(s)，且不带用户名密码）。
+- 工具名 `comfyui_generate`，超时 300 秒（`TOOL_TIMEOUT_MS`）。参数只有四个：`prompt`（必填）、`negative`、`workflow`、`baseUrl`；空白项不会进入请求。`workflow` 省略时用面板当前保存的那个（面板选过工作流就会自动保存，所以「界面上选的那个」与「工具默认用的那个」始终一致）；也可以只写文件名或不带前缀的子目录路径，宿主会先补 `workflows/` 再去取。`baseUrl` 可临时覆盖面板「ComfyUI 地址」里配置的地址（地址仍须是合法 http(s)，且不带用户名密码）。
 - 执行的是面板同一条链路：`comfyRun(options, body)` → 必要时上传参考图 → `POST /prompt` → 轮询 `/history` → `GET /view` → 复制进面板画廊。`comfyRun` 多返回的 `files`（图片字节）只给工具用，`handleComfyGenerate` 会在 HTTP 响应里剥掉它。
 - 结果留了两条路径：挂载了 `attachments` 服务时，把第一张图交给 `attachments.saveImage`，render 输出 `[{type:'text'}, {type:'image', attachment}]`，图片会随附到后续上下文，模型真的能看见；没有附件服务、或保存失败（尺寸/类型不受支持等）时降级为纯文字摘要，并在 `note` 里说明原因 —— 不会假装已经回图。
 - 文字摘要只含工作流名、产出张数、耗时与画廊文件名，**不含图片字节，也不含 base64**。
@@ -220,7 +220,7 @@ npm test
 | `test-client.mjs` | 浏览器半能在 stub React 下渲染、注册四个槽位、并渲染出「生成方式」开关、预览框、生成数量控件与「读取模型」「读取工作流」入口；「图像服务」与「模型」确实坐在同一行，且模型目录的自动读取接线存在 |
 | `test-auth.mjs` | 密钥不外泄、生成入库、逐请求解析凭据 |
 | `test-tool.mjs` | 对话工具的输出/附件 schema、参数与输出都编译成标准 JSON Schema（`required` 数组、`enum`、`items` 全保留，无残留的 `required: true`）、空提示词直接拒绝、两份定义不共享可变 schema、参数裁剪、回图与降级（附件保存失败或返回空 id 时只回文字摘要）、画廊摘要不含图片字节、耗时取整、render 的 text/image 块、原始定义与 `defineTool` 简写行为一致、`resolveDefineTool()` 只能是 function 或 null |
-| `test-comfy.mjs` | ComfyUI 直连的线格式：子目录工作流要整条路径编码（404 时回退分段编码）、裸文件名先在 `workflows/` 里找、`widgets_values` 里 seed 后的控制框不串位（含未声明的情况）、自定义 socket 不被当成控件、排队编号由服务端生成、拒绝原因不含 `[object Object]`、工作流列表过滤掉 `metadata.json` 与 `.before-*` 备份；以及多段式工作流的提示词落点（基准段而非 0.14 收尾段、Detailer 段不被改写、正向与负向不串侧、两个空 latent 段取 denoise 大者、无采样器时按序回落、每个 seed 都重掷） |
+| `test-comfy.mjs` | ComfyUI 直连的线格式：子目录工作流要整条路径编码（404 时回退分段编码）、裸文件名与子目录路径都先补 `workflows/` 再取、`widgets_values` 里 seed 后的控制框不串位（含未声明的情况）、自定义 socket 不被当成控件、排队编号由服务端生成、拒绝原因不含 `[object Object]`、工作流列表过滤掉 `metadata.json` 与 `.before-*` 备份；以及多段式工作流的提示词落点（基准段而非 0.14 收尾段、Detailer 段不被改写、正向与负向不串侧、两个空 latent 段取 denoise 大者、无采样器时按序回落、每个 seed 都重掷） |
 | `test-host.mjs` | 全部宿主路由（含 `/models`、`/comfy/workflows`）、穿越名、同源守卫、请求体上限、`mode` 分流（generations vs edits、缺参考图 400、无 `mode` 回落）、批量生成的成功/夹紧/部分失败/全失败，以及 ComfyUI 直连链路（stub ComfyUI：userdata 列表与 legacy 回退、上传参考图 → `/prompt` → `/history` → `/view` → 把产物复制进画廊、HTTP 200 拒绝 bodies、执行报错原文回传、无图结果、本地校验不打 ComfyUI） |
 | `test-bridge.mjs` / `test-bridge-route.mjs` | 旧对话半的留存回归 |
 | `test-package.mjs` | 发布面：`files` 白名单覆盖全部构建产物与源码、`main`/`exports`/`dsh.bundle.patch` 指向的文件确实会被别人拿到、`cordis.patch.yml` 只挂载本包一次、版本在 `package.json` 与 `CHANGELOG.md` 里一致、`repository`/`homepage`/`bugs` 是可点击的真实地址、中英文两份 README 互链、CI 覆盖构建检查与整套测试、已发布的文本文件里既没有本机绝对路径也没有待替换的仓库占位符 |
@@ -237,9 +237,9 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 
 ## 本轮验证
 
-`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 23 项、`test-comfy.mjs` 20 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 233 项）。
+`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 23 项、`test-comfy.mjs` 21 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 234 项）。
 
-发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.5.tgz` 内恰好 35 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
+发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.6.tgz` 内恰好 35 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
 
 已经真机验收的部分：**本机 ComfyUI 端到端**。`/comfy/workflows` 从真实的 ComfyUI 读到 36 个可运行工作流（`metadata.json` 与 `.before-*` 备份都被滤掉），`/comfy/generate` 用其中一张 46 节点的多段式工作流跑出 1 张 3.16 MB 的 PNG，耗时约 40 秒；同一个工作流经对话工具 `comfyui_generate` 再跑一次，图片以内容块回到了对话里。非法地址（`ftp://…`）按 400 拒绝、空地址回落配置值，也都验过。
 

@@ -140,6 +140,26 @@ test('a bare name outside workflows/ still resolves', async () => {
     ])
   })
 })
+test('a subdirectory path without the workflows/ prefix is scoped too', async () => {
+  // Workflows may sit in a folder inside workflows/, which the picker reports
+  // as `Anima/a.json`. ComfyUI serves that file only at the fully encoded
+  // `workflows/Anima/a.json`, so the prefix has to be added for those as well.
+  const fullPath = '/userdata/' + encodeURIComponent('workflows/Anima/a.json')
+  await withComfy((url, req, res) => {
+    if (url.pathname === fullPath) {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(API_ONLY_WORKFLOW))
+      return
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end('{"error":"no such file"}')
+  }, async (base, requests) => {
+    const result = await readWorkflow(base, 'Anima/a.json')
+    assert.ok(result.graph['1'], 'the graph comes back')
+    assert.deepEqual(requests.map((entry) => entry.url), [fullPath])
+  })
+})
+
 test('a missing workflow is reported as a readable failure', async () => {
   await withComfy((url, req, res) => {
     res.writeHead(404, { 'Content-Type': 'application/json' })

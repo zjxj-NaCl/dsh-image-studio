@@ -640,11 +640,13 @@ export async function readWorkflow(baseUrl, path, timeoutMs = CATALOG_TIMEOUT_MS
   const target = String(path ?? '').trim()
   if (target === '') throw new Error('缺少工作流路径')
   if (target.includes('..')) throw new Error('工作流路径不合法：' + target)
-  // A caller may name a workflow by the path the picker reports
-  // (`workflows/<name>.json`), by a path with a subdirectory, or by its bare
-  // file name. Bare names live in `workflows/`, so they are looked up there
-  // first and used as given only when that misses.
-  const candidates = target.includes('/') ? [target] : [WORKFLOWS_DIR + '/' + target, target]
+  // Everything the picker lists lives under `workflows/`, and callers name it
+  // three ways: the bare file name, a subdirectory path without the prefix
+  // (`独立测试/<name>.json`), or the full `workflows/...` path. The prefix is
+  // therefore added whenever it is missing, and the path as given is only the
+  // fallback for files that really sit in the user-data root.
+  const scoped = target === WORKFLOWS_DIR || target.startsWith(WORKFLOWS_DIR + '/')
+  const candidates = scoped ? [target] : [WORKFLOWS_DIR + '/' + target, target]
   let response = null
   for (const candidate of candidates) {
     response = await readUserDataFile(url, candidate, timeoutMs)
