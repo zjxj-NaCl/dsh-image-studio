@@ -20,7 +20,7 @@ function declarations(source) {
 const model = declarations(data['src/studio-model.js'])
 const config = declarations(data['src/model-config.js'])
 let clientSource = data['src/client.js']
-for (const [line, expected] of [["import * as React from 'react'", 'React'], ["import * as Model from './studio-model.js'", 'Model'], ["import { CONFIG_STYLES, LLMConfigPanel, ModelConfigPanel, StudioAssistant, refreshConfig, refreshWorkflows } from './model-config.js'", 'ModelConfig']]) {
+for (const [line, expected] of [["import * as React from 'react'", 'React'], ["import * as Model from './studio-model.js'", 'Model'], ["import { CONFIG_STYLES, LLMConfigPanel, ModelConfigPanel, StudioAssistant, chooseWorkflow, refreshConfig, refreshWorkflows } from './model-config.js'", 'ModelConfig']]) {
   if (!clientSource.includes(line)) throw new Error('Missing expected client import: ' + expected)
   clientSource = clientSource.replace(line, '')
 }

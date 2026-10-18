@@ -2,6 +2,23 @@
 
 写法参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.5] - 2026-10-18
+
+对话里第一次真正出图之后暴露了三个问题：裸文件名读不到工作流、面板选的工作流从不落盘、提示词被写进多段式工作流的收尾段（所以画面不变）。三个都修了，并用同一张 46 节点的工作流在真机上验过「提示词生效」。
+
+### 修复
+
+- **裸文件名读不到工作流（404）**：ComfyUI 把工作流放在 `workflows/` 下，而调用方通常只写文件名（`anime style SDXL.json`）。`readWorkflow` 现在对不含斜杠的名字先试 `workflows/x.json`，再按原样试一次；带路径的写法照旧。
+- **面板选中的工作流从不落盘**：`workflow` 过去只在界面状态里，只有点「保存配置」才写 `config.json`，于是对话工具不传 `workflow` 时永远报「请先在「生成方式」中选择一个 ComfyUI 工作流」。现在在下拉里挑中（或手填框失焦）就 `POST /config/save` 只保存这一个字段，工具的默认值与面板选择不再脱节。
+- **提示词被写进多段式工作流的收尾段**：`applyPrompt` 原来只认「采样器的 positive 直接指向文本编码节点」，而真实工作流把 conditioning 先过 `ControlNetApplyAdvanced` 之类的节点，于是它跳过了真正出图的那一段（`denoise: 1`），把提示词写进了 `denoise: 0.14` 的 inpaint 收尾段 —— 图能出来，但和提示词无关。现在先沿 `latent_image` 找出「从空 latent 起步」的采样段，取其中 `denoise` 最大的作为基准段；再顺着 conditioning 接线（`positive`/`negative`/`conditioning` 输入）走到该段的文本编码节点。`positive` 与 `negative` 各走各的一侧，`ControlNetApplyAdvanced` 同时有两个槽也不会把负向词写进正向。
+
+### 变更
+
+- `applyPrompt` 的返回值多了 `positiveIds` / `negativeIds`（实际写入的节点集合），`strategy` 现在是 `sampler` 或 `fallback`；旧的 `positiveId` / `negativeId` 字段保留。
+- `src/comfy.js` 新增 `collectTextEncoders`、`startsFromEmptyLatent`、`baseSamplerId`、`readUserDataFile`；删掉旧的 `resolveConditioning` 与未使用的 `CONDITIONING_KEYS`。
+- 面板里挑选工作流即保存，README 的 ComfyUI 链路步骤同步改写（选了就会写盘、`workflow` 可只写文件名、基准段与 Detailer 段的区别）。
+- `test-comfy.mjs` 12 → **20 项**：裸文件名先查 `workflows/`、裸名在别处也能解析、多段式工作流的提示词落点（基准段而非收尾段、Detailer 段不被改写、正负不串侧、两个空 latent 段取 denoise 大者、无采样器时按序回落、每个 seed 都重掷）。测试合计 225 → **233 项**。
+
 ## [0.11.4] - 2026-10-18
 
 `comfyui_generate` 现在真的会出现在对话里：安装型插件过去取不到 `defineTool`，注册函数直接返回，工具在任何会话里都不存在。这一版改成交出宿主本身就能接受的原始定义。

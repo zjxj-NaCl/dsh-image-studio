@@ -577,7 +577,8 @@ try {
     if (typeof body.promptId !== 'string' || body.promptId === '') throw new Error('the prompt id was not reported')
     if (Object.hasOwn(body, 'files')) throw new Error('the browser answer leaked raw image bytes through files')
     const paths = comfyPaths.slice(before)
-    const expected = ['GET /userdata/sd35_large.json', 'POST /prompt', 'GET /history/' + String(body.promptId), 'GET /view']
+    // A bare workflow name is looked up under 'workflows/' first, which is where ComfyUI keeps them.
+    const expected = ['GET /userdata/workflows%2Fsd35_large.json', 'POST /prompt', 'GET /history/' + String(body.promptId), 'GET /view']
     if (JSON.stringify(paths) !== JSON.stringify(expected)) throw new Error('a reference-free run called ' + JSON.stringify(paths))
     const sent = comfyBodies[comfyBodies.length - 3]
     if (sent.prompt['6'].inputs.text !== 'a red cube') throw new Error('the positive prompt was not written through the sampler link')

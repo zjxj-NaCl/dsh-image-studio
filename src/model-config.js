@@ -124,15 +124,20 @@ export function ModelConfigPanel() {
           className: 'cis-select',
           value: form.workflow,
           disabled: locked,
-          onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+          onChange: (event) => void chooseWorkflow(event.target.value),
         },
           h('option', { value: '', key: '' }, '（不指定）'),
           form.workflow !== '' && !knownWorkflow
             ? h('option', { value: form.workflow, key: form.workflow }, form.workflow + '（当前配置，不在列表中）')
             : null,
           ...workflowCatalog.map((entry) => h('option', { value: entry.path, key: entry.path }, entry.name)))
-        : h('input', { className: 'cis-input', value: form.workflow, disabled: locked,
-          onChange: (event) => Model.workspace.setField('workflow', event.target.value) }),
+        : h('input', {
+          className: 'cis-input',
+          value: form.workflow,
+          disabled: locked,
+          onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+          onBlur: (event) => void chooseWorkflow(event.target.value),
+        }),
       h('div', { className: 'cis-actions' },
         button(ws.workflowsBusy ? '正在读取…' : '读取工作流', () => void refreshWorkflows(), locked || ws.workflowsBusy),
         workflowCatalog.length > 0 ? h('span', { className: 'cis-hint' }, '共 ' + workflowCatalog.length + ' 个工作流') : null),
@@ -243,6 +248,31 @@ export async function refreshWorkflows() {
   if (workflows.length === 0) {
     Model.workspace.setWorkflowsError('ComfyUI 的 workflows 目录里没有工作流；请先在 ComfyUI 里保存一份工作流（建议用「导出（API 格式）」）。')
   }
+}
+
+/**
+ * Record the workflow the user picked, and persist that choice.
+ *
+ * The conversational tool falls back to the *saved* workflow when a call omits
+ * one, so a choice that only ever lived in the panel's form would leave the tool
+ * with nothing to run — which is exactly what happened before this existed.
+ * Picking a dropdown entry is one deliberate action, so it is written through the
+ * same `/config/save` route the form uses; nothing else in the form is touched,
+ * and the address it was read from travels with it so the tool runs against the
+ * same ComfyUI.
+ *
+ * @param value - the workflow path the picker reports, or a hand-typed name.
+ */
+export async function chooseWorkflow(value) {
+  Model.workspace.setField('workflow', value)
+  const workflow = String(value ?? '').trim()
+  if (workflow === '') return
+  const baseUrl = String(Model.workspace.get().form.comfyBaseUrl ?? '').trim()
+  const res = await callPanel('/config/save', {
+    method: 'POST',
+    body: baseUrl === '' ? { workflow } : { workflow, comfyBaseUrl: baseUrl },
+  })
+  if (!res.ok) Model.workspace.setError('保存工作流选择失败：' + res.error)
 }
 
 /** The Agent's LLM settings, used for prompt polishing and the assistant. */

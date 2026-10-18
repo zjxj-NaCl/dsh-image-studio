@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 
-import { listWorkflows, runWorkflow, toApiGraph, readWorkflow } from './src/comfy.js'
+import { applyPrompt, listWorkflows, runWorkflow, toApiGraph, readWorkflow } from './src/comfy.js'
 
 const cases = []
 const test = (name, fn) => { cases.push({ name, fn }) }
@@ -103,6 +103,43 @@ test('a server that wants real slashes is retried once', async () => {
   })
 })
 
+test('a bare workflow name is looked for under workflows/ first', async () => {
+  // The picker hands out paths like `workflows/a.json`, but a tool call names
+  // the file the way the user sees it in ComfyUI, which is just `a.json`.
+  await withComfy((url, req, res) => {
+    if (url.pathname === '/userdata/workflows%2Fa.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(API_ONLY_WORKFLOW))
+      return
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end('{"error":"no such file"}')
+  }, async (base, requests) => {
+    const result = await readWorkflow(base, ' a.json ')
+    assert.ok(result.graph['1'], 'the graph comes back')
+    assert.deepEqual(requests.map((entry) => entry.url), ['/userdata/workflows%2Fa.json'])
+  })
+})
+
+test('a bare name outside workflows/ still resolves', async () => {
+  await withComfy((url, req, res) => {
+    if (url.pathname === '/userdata/a.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(API_ONLY_WORKFLOW))
+      return
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' })
+    res.end('{"error":"no such file"}')
+  }, async (base, requests) => {
+    const result = await readWorkflow(base, 'a.json')
+    assert.ok(result.graph['1'], 'the graph comes back')
+    assert.deepEqual(requests.map((entry) => entry.url), [
+      '/userdata/workflows%2Fa.json',
+      '/userdata/workflows/a.json',
+      '/userdata/a.json',
+    ])
+  })
+})
 test('a missing workflow is reported as a readable failure', async () => {
   await withComfy((url, req, res) => {
     res.writeHead(404, { 'Content-Type': 'application/json' })
@@ -365,6 +402,99 @@ test('a finished run hands back the picture it produced', async () => {
   })
 })
 
+// --- prompt placement --------------------------------------------------------
+
+/**
+ * A three-stage graph shaped like the real 46-node anime workflow: a
+ * control-net pass samples from an empty latent, a hires pass samples from the
+ * upscaled result, and a refine pass denoises at 0.14 from an inpaint mask.
+ */
+function stagedWorkflow() {
+  const encode = (text) => ({ class_type: 'CLIPTextEncode', inputs: { text, clip: ['5', 0] } })
+  return {
+    5: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'model.safetensors' } },
+    3: { class_type: 'EmptyLatentImage', inputs: { width: 896, height: 1344, batch_size: 1 } },
+    15: encode('belfast, masterpiece'),
+    10: encode('worst quality'),
+    13: {
+      class_type: 'ControlNetApplyAdvanced',
+      inputs: { positive: ['15', 0], negative: ['10', 0], control_net: ['11', 0], image: ['12', 0], strength: 0.55 },
+    },
+    11: { class_type: 'ControlNetLoader', inputs: { control_net_name: 'cn.safetensors' } },
+    12: { class_type: 'LoadImage', inputs: { image: 'ref.png' } },
+    14: {
+      class_type: 'KSampler',
+      inputs: { seed: 1, model: ['5', 0], positive: ['13', 0], negative: ['13', 1], latent_image: ['3', 0], denoise: 1, steps: 30 },
+    },
+    6: { class_type: 'LatentUpscale', inputs: { samples: ['14', 0], width: 1152, height: 1728 } },
+    7: {
+      class_type: 'KSampler',
+      inputs: { seed: 2, model: ['5', 0], positive: ['13', 0], negative: ['13', 1], latent_image: ['6', 0], denoise: 0.16, steps: 20 },
+    },
+    400: { class_type: 'LoadImage', inputs: { image: 'face.png' } },
+    405: { class_type: 'VAEEncode', inputs: { pixels: ['400', 0], vae: ['5', 2] } },
+    406: { class_type: 'SetLatentNoiseMask', inputs: { samples: ['7', 0], mask: ['405', 0] } },
+    407: encode('score_9, anime illustration'),
+    408: encode('score_6, extra fingers'),
+    409: {
+      class_type: 'KSampler',
+      inputs: { seed: 3, model: ['5', 0], positive: ['407', 0], negative: ['408', 0], latent_image: ['406', 0], denoise: 0.14, steps: 8 },
+    },
+  }
+}
+
+test('the prompt lands in the sampling pass that actually draws the picture', () => {
+  const graph = stagedWorkflow()
+  const placement = applyPrompt(graph, 'a red cube on a wooden table', 'blurry')
+  assert.equal(graph[15].inputs.text, 'a red cube on a wooden table')
+  assert.equal(graph[10].inputs.text, 'blurry')
+  assert.deepEqual(placement.positiveIds, ['15'])
+  assert.deepEqual(placement.negativeIds, ['10'])
+})
+
+test('a refine pass behind an inpaint mask is left alone', () => {
+  const graph = stagedWorkflow()
+  applyPrompt(graph, 'a red cube on a wooden table', 'blurry')
+  assert.equal(graph[407].inputs.text, 'score_9, anime illustration')
+  assert.equal(graph[408].inputs.text, 'score_6, extra fingers')
+  assert.equal(graph[75], undefined)
+})
+
+test('the positive walk never crosses into the negative encoder', () => {
+  const graph = stagedWorkflow()
+  const placement = applyPrompt(graph, 'a red cube', 'blurry')
+  assert.ok(!placement.positiveIds.includes('10'), 'negative encoder must not appear as positive')
+  assert.ok(!placement.negativeIds.includes('15'), 'positive encoder must not appear as negative')
+  assert.equal(graph[15].inputs.text, 'a red cube')
+})
+
+test('two passes from an empty latent resolve to the one with the highest denoise', () => {
+  const graph = stagedWorkflow()
+  graph[7].inputs.latent_image = ['3', 0]
+  const placement = applyPrompt(graph, 'a red cube', 'blurry')
+  assert.deepEqual(placement.positiveIds, ['15'])
+  assert.equal(graph[15].inputs.text, 'a red cube')
+  assert.equal(graph[407].inputs.text, 'score_9, anime illustration')
+})
+
+test('a graph with no sampler still gets the prompt', () => {
+  const graph = {
+    1: { class_type: 'CLIPTextEncode', inputs: { text: 'first', clip: ['9', 0] } },
+    2: { class_type: 'CLIPTextEncode', inputs: { text: 'second', clip: ['9', 0] } },
+  }
+  const placement = applyPrompt(graph, 'a red cube', 'blurry')
+  assert.equal(placement.strategy, 'fallback')
+  assert.equal(graph[1].inputs.text, 'a red cube')
+  assert.equal(graph[2].inputs.text, 'blurry')
+})
+
+test('every seed is rerolled so the same workflow never repeats an image', () => {
+  const graph = stagedWorkflow()
+  applyPrompt(graph, 'a red cube', 'blurry')
+  assert.notEqual(graph[14].inputs.seed, 1)
+  assert.notEqual(graph[7].inputs.seed, 2)
+  assert.notEqual(graph[409].inputs.seed, 3)
+})
 // --- runner ------------------------------------------------------------------
 
 const failures = []

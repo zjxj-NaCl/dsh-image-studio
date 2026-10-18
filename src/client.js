@@ -15,7 +15,7 @@
 
 import * as React from 'react'
 import * as Model from './studio-model.js'
-import { CONFIG_STYLES, LLMConfigPanel, ModelConfigPanel, StudioAssistant, refreshConfig, refreshWorkflows } from './model-config.js'
+import { CONFIG_STYLES, LLMConfigPanel, ModelConfigPanel, StudioAssistant, chooseWorkflow, refreshConfig, refreshWorkflows } from './model-config.js'
 
 /** Same-origin prefix owned by this bundle's host half. */
 const PANEL = '/image-studio'
@@ -585,7 +585,7 @@ function StudioWorkbench() {
               workflowCatalog.length > 0
                 ? h('select', {
                   className: 'cis-select', value: ws.form.workflow, disabled: busy,
-                  onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+                  onChange: (event) => void chooseWorkflow(event.target.value),
                 },
                   h('option', { value: '', key: '' }, '（请选择工作流）'),
                   // Keep a configured workflow selectable even when this server no
@@ -600,6 +600,7 @@ function StudioWorkbench() {
                   className: 'cis-input', value: ws.form.workflow, disabled: busy,
                   placeholder: 'sd35_large',
                   onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+                  onBlur: (event) => void chooseWorkflow(event.target.value),
                 }),
               workflowCatalog.length > 0
                 ? h('span', { className: 'cis-hint' }, '共 ' + workflowCatalog.length + ' 个工作流，读自 ' + (comfyBase === '' ? Model.DEFAULT_COMFY_URL : comfyBase))
