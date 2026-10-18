@@ -36,7 +36,7 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 前置条件、三条安装路线（桌面版图形界面 / `dsh plugin` 命令行 / 源码构建）、装后配置、环境变量、卸载升级与排错表都在 [INSTALL.md](INSTALL.md)。最短路径三步：
 
-1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.1.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
+1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.2.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
 2. **装**：在 DSH 的插件管理界面里选这个压缩包（或填上面的 Git 地址 / 本地路径），装完**重启 DSH**——宿主半只在启动时注册路由，只刷新前端不生效。
 3. **配**：在面板的「模型配置」里填服务地址、模型名与密钥。安装不等于配置；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
 
@@ -86,12 +86,12 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 - 为兼容直接调用方，请求里**没有** `mode`（或值不认识）时宿主回落到旧启发式「有参考图即编辑，否则生成」；面板自身总会带上 `mode`。
 - 切换模式**保留已上传的参考图**，来回切不会丢，只是文生图下不会被提交。忙碌（`busy`）时开关禁用，避免一次提交中途换面。
 - 预览框的「继续编辑」会取回选中图、加入参考图并自动切到 `edit`；空态与「参考图」提示文案都跟随当前模式变化。
-- `comfy` 与另外两种模式走完全不同的链路，因此**不读图像服务配置**：它不提交尺寸/比例/档位/质量，也不显示「生成数量」控件（工作流本身不接面板的批量参数）。提示词与第一张参考图由宿主直接交给本机 ComfyUI，可选的工作流文件也直接读自 ComfyUI 保存工作流的目录——整个 ComfyUI 模式不经过项目 Agent，面板也不需要 Agent 侧有 ComfyUI 工作流注册表。
+- `comfy` 与另外两种模式走完全不同的链路，因此**不读图像服务配置**：它不提交尺寸/比例/档位/质量，也不显示「生成数量」控件（工作流本身不接面板的批量参数）。提示词与第一张参考图由宿主直接交给本机 ComfyUI，所选工作流也直接读自 ComfyUI 保存工作流的目录——整个 ComfyUI 模式不经过项目 Agent，面板也不需要 Agent 侧有 ComfyUI 工作流注册表。切到 `comfy` 时，「生成方式」下面会多出**这一屏自己的**「ComfyUI 地址」与「工作流」两栏：填地址、点「读取工作流」、从下拉里挑一个，就能直接运行并出图，**不必先去「模型配置」保存**（那里保留同名字段，编辑的是同一个值）。
 
 ### ComfyUI 工作流链路
 
-1. 选中 `comfy` 后，面板若尚未读到工作流目录，会自动 `GET /comfy/workflows`（宿主查本机 ComfyUI 的 `GET /v2/userdata?path=workflows`，旧版回退 `GET /userdata?dir=workflows`）填下拉；也可在「模型配置」里手动点「读取工作流」，读取失败时按文件名手写。
-2. 提交 `POST /comfy/generate`，体为 `{workflow, prompt, negative, reference}`；`reference` 只有第一张会被采用。
+1. 切到 `comfy` 后，面板若尚未读到工作流目录，会用当前地址自动 `GET /comfy/workflows`（宿主查本机 ComfyUI 的 `GET /v2/userdata?path=workflows`，旧版回退 `GET /userdata?dir=workflows`）填下拉。地址栏留空则用面板配置值，再缺省回落到 `http://127.0.0.1:8188`；把它改成别的机器/端口后点「读取工作流」重取即可，请求会带上 `?baseUrl=` 临时覆盖，不必先保存配置。读不到时下拉退回手填框，按文件名写也行。
+2. 提交 `POST /comfy/generate`，体为 `{workflow, prompt, negative, reference, baseUrl?}`；`workflow` 就是下拉里选中的文件名，提示词由宿主注入工作流，`baseUrl` 只在这次请求里覆盖地址，`reference` 只有第一张会被采用。
 3. 若有参考图：宿主把字节 multipart 上传（`POST /upload/image`，`type=input`、`overwrite=true`），拿到 ComfyUI 返回的文件名，写进图里第一个 `LoadImage` 节点的 `image` 输入框。
 4. 宿主 `POST /prompt` 提交 `{prompt, client_id, prompt_id}`，其中 `prompt` 是注入过提示词的 API 格式图。
 5. 宿主每秒轮询 `GET /history/{prompt_id}`，直到 `outputs` 出现或 `status.status_str` 变成 `error`（超时由宿主 `DEFAULT_GENERATE_TIMEOUT_MS` 控制）。
@@ -140,7 +140,7 @@ ComfyUI 的 `/prompt` 只接受 **API 格式**（`{nodeId: {class_type, inputs}}
 | `/image` | GET | 按名回传图片；名称限定为裸文件名，穿越名一律 400 |
 | `/delete` | POST | 删除一张图片 |
 | `/generate` | POST | 按 `mode` 直调 generations/edits 并入库；`count` 1–4 张逐张串行，部分失败返回 `partialError` |
-| `/comfy/workflows` | GET | 读本机 ComfyUI 保存工作流的目录（`GET /v2/userdata?path=workflows`，回退 `/userdata?dir=workflows`），返回 `{ok, baseUrl, workflows: [{name, path}]}`（20 秒超时） |
+| `/comfy/workflows` | GET | 读本机 ComfyUI 保存工作流的目录（`GET /v2/userdata?path=workflows`，回退 `/userdata?dir=workflows`），返回 `{ok, baseUrl, workflows: [{name, path}]}`（20 秒超时）。可选 `?baseUrl=` 临时覆盖地址（生成界面改完地址不保存就能读），非法 http(s) 地址按 400 拒绝 |
 | `/comfy/generate` | POST | 把 `{workflow, prompt, negative, reference, baseUrl?}` 交给本机 ComfyUI（有参考图先 `/upload/image`），轮询 `/history` 后把 `/view` 取到的图片复制进面板画廊；`baseUrl` 可临时覆盖面板配置的地址。响应只回画廊条目与文字摘要，不含图片字节 |
 | `/llm/config` | GET | 代理 Agent 的 `GET /v1/llm/config` |
 | `/llm/save` | POST | 代理 Agent 的 `POST /v1/llm/config` |
@@ -235,9 +235,9 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 
 ## 本轮验证
 
-`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 42 项、`test-host.mjs` 42 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 202 项）。
+`npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 18 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 208 项）。
 
-发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.1.tgz` 内恰好 34 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
+发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.2.tgz` 内恰好 34 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
 
 尚未验收的部分：真实图像服务调用与画质（本插件未发送真实图像 API 请求），以及**真实 ComfyUI 端到端**——`/comfy/workflows` 与 `/comfy/generate` 只在 stub ComfyUI 下测过（改到直连方案时本机没有任何监听端口，ComfyUI 与项目 Agent 都没启动）。真机需要确认三件事：ComfyUI 的 `--listen`/端口与面板「ComfyUI 地址」一致；它的 `user/default/workflows/` 里确有 `.json` 工作流；UI 格式的工作流能被 `toApiGraph` 转换（转换依赖 `/object_info` 里该节点的 `input_order`，自定义节点包若没有导出这两个顺序就转换不了，此时请在 ComfyUI 里用「导出（API 格式）」另存一份）。UI→API 转换与提示词真正落到哪个节点也值得先拿一张简单的工作流试：面板会说明它用的是 KSampler 链接还是顺序回落（`note`）。
 

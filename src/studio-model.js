@@ -205,11 +205,16 @@ export function comfyPayload(form, references = []) {
     if (typeof first?.data !== 'string' || first.data === '') throw new Error('参考图数据不完整，请重新选择')
     reference = { data: first.data, mediaType: first.mediaType, name: String(first.name ?? '') }
   }
+  // An address typed for this run only overrides the saved configuration when it
+  // is actually filled in; an empty string would read as "override with nothing"
+  // and the host would fall back to the default instead of the saved value.
+  const baseUrl = String(form.comfyBaseUrl ?? '').trim()
   return {
     workflow,
     prompt,
     negative: String(form.negative ?? '').trim(),
     reference,
+    ...(baseUrl === '' ? {} : { baseUrl }),
   }
 }
 
@@ -337,6 +342,7 @@ export function createWorkspace() {
     modelsBusy: false,
     modelsError: null,
     workflows: [],
+    workflowsFor: '',
     workflowsLoaded: false,
     workflowsBusy: false,
     workflowsError: null,
@@ -438,10 +444,11 @@ export function createWorkspace() {
      * `workflowsLoaded` distinguishes "ComfyUI answered with an empty directory"
      * from "we have not asked yet", so the panel can show a real empty state.
      */
-    setWorkflows: (workflows) => update({
+    setWorkflows: (workflows, baseUrl) => update({
       workflows: Array.isArray(workflows)
         ? workflows.filter((entry) => entry && typeof entry.path === 'string' && entry.path.trim() !== '')
         : [],
+      workflowsFor: String(baseUrl ?? state.workflowsFor ?? '').trim(),
       workflowsLoaded: true,
       workflowsBusy: false,
       workflowsError: null,

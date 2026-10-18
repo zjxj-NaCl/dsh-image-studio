@@ -223,6 +223,22 @@ check('an empty workflow list does not claim a count',
   !studioTexts.some((t) => /^共 \d+ 个工作流$/.test(String(t))),
   JSON.stringify(studioTexts.filter((t) => String(t).includes('个工作流'))))
 
+// The ComfyUI surface must be runnable on its own: the address and the workflow
+// are picked right above the prompt, so nothing has to be saved in the config tab
+// before a workflow can be tried.
+check('the ComfyUI address is offered on both surfaces',
+  (source.match(/'ComfyUI 地址'/g) ?? []).length === 2,
+  'expected the studio surface and the config panel to each offer the address')
+check('the studio surface picks a workflow instead of requiring a typed name',
+  source.includes("'（请选择工作流）'") && source.includes('workflowCatalog.map'),
+  'the workflow list must render as a picker')
+check('a workflow list is tied to the address that produced it',
+  source.includes('ws.workflowsFor === comfyBase'),
+  'a list read from another machine must not be offered')
+check('the studio surface can read the workflow list without saving first',
+  source.includes('refreshWorkflows()'),
+  'the studio surface must offer 读取工作流')
+
 const galleryTexts = texts(gallery.component({}))
 check('gallery is titled 生图画廊', galleryTexts.includes('生图画廊'), galleryTexts.slice(0, 6).join(' | '))
 

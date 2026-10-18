@@ -488,8 +488,18 @@ function StudioWorkbench() {
   const editing = mode === 'edit'
   const comfy = mode === 'comfy'
   const workflowReady = String(ws.form.workflow ?? '').trim() !== ''
+  // The address on screen is where the ComfyUI surface points right now. It is the
+  // same form field the configuration panel edits, so a machine can be selected
+  // and run without saving the configuration first.
+  const comfyBase = String(ws.form.comfyBaseUrl ?? '').trim()
+  // A workflow list belongs to the address it was read from; showing one read from
+  // another machine would offer names that cannot be fetched.
+  const workflowCatalog = ws.workflowsFor === comfyBase ? ws.workflows : []
+  const knownWorkflow = workflowCatalog.some((entry) => entry.path === ws.form.workflow)
   // The workflow list is whatever the local ComfyUI has saved, so it is only
-  // worth reading once the user actually picks the ComfyUI surface.
+  // worth reading once the user actually picks the ComfyUI surface. Changing the
+  // address afterwards is an explicit 「读取工作流」 click rather than an effect,
+  // so typing an address does not fire a request per keystroke.
   React.useEffect(() => {
     if (!comfy || ws.workflowsLoaded || ws.workflowsBusy) return
     void refreshWorkflows()
@@ -557,6 +567,44 @@ function StudioWorkbench() {
                 : editing
                   ? '图生图：把参考图交给编辑接口，按提示词修改或变换。'
                   : '文生图：只按提示词出图，不会上传参考图。')),
+            // The ComfyUI surface carries its own address and its own workflow
+            // picker: it talks straight to that server, so the image-service
+            // configuration has nothing to say about where it runs or what it runs.
+            comfy ? h('div', { className: 'cis-field' },
+              h('span', { className: 'cis-label' }, 'ComfyUI 地址'),
+              h('div', { className: 'cis-row' },
+                h('input', {
+                  className: 'cis-input', value: ws.form.comfyBaseUrl, disabled: busy,
+                  placeholder: Model.DEFAULT_COMFY_URL,
+                  onChange: (event) => Model.workspace.setField('comfyBaseUrl', event.target.value),
+                }),
+                button(ws.workflowsBusy ? '正在读取…' : '读取工作流', () => void refreshWorkflows(), busy || ws.workflowsBusy)),
+              h('span', { className: 'cis-hint' }, '填本机 ComfyUI 的 HTTP 地址；留空则用 ' + Model.DEFAULT_COMFY_URL + '。改地址后点「读取工作流」重新取列表，不必先去「模型配置」保存。')) : null,
+            comfy ? h('label', { className: 'cis-field' },
+              h('span', { className: 'cis-label' }, '工作流'),
+              workflowCatalog.length > 0
+                ? h('select', {
+                  className: 'cis-select', value: ws.form.workflow, disabled: busy,
+                  onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+                },
+                  h('option', { value: '', key: '' }, '（请选择工作流）'),
+                  // Keep a configured workflow selectable even when this server no
+                  // longer lists it, so the form cannot silently lose it.
+                  ws.form.workflow !== '' && !knownWorkflow
+                    ? h('option', { value: ws.form.workflow, key: ws.form.workflow }, ws.form.workflow + '（当前配置，不在列表中）')
+                    : null,
+                  ...workflowCatalog.map((entry) => h('option', { value: entry.path, key: entry.path }, entry.name)))
+                // The enclosing label already draws the heading, so the manual
+                // fallback is a bare input rather than field().
+                : h('input', {
+                  className: 'cis-input', value: ws.form.workflow, disabled: busy,
+                  placeholder: 'sd35_large',
+                  onChange: (event) => Model.workspace.setField('workflow', event.target.value),
+                }),
+              workflowCatalog.length > 0
+                ? h('span', { className: 'cis-hint' }, '共 ' + workflowCatalog.length + ' 个工作流，读自 ' + (comfyBase === '' ? Model.DEFAULT_COMFY_URL : comfyBase))
+                : h('span', { className: 'cis-hint' }, '还没读到工作流列表：填好地址后点「读取工作流」，或手工填写 ComfyUI 里的工作流文件名。'),
+              ws.workflowsError ? h('span', { className: 'cis-warn' }, ws.workflowsError) : null) : null,
             field('提示词', prompt, setPrompt, { textarea: true, disabled: busy, maxLength: 8000 }),
             field('负向提示词（可选）', negative, setNegative, { textarea: true, disabled: busy, maxLength: 4000 }),
             h(ReferencePicker),

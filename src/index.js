@@ -258,7 +258,7 @@ async function handlePanel(req, res, options) {
         await handleComfyGenerate(res, options, parseBody(body))
         return
       case '/comfy/workflows':
-        await handleComfyWorkflows(res, options)
+        await handleComfyWorkflows(req, res, options)
         return
       default:
         sendJson(res, 404, { error: 'unknown panel route' })
@@ -602,12 +602,25 @@ async function handleGenerate(res, options, body) {
  * ComfyUI keeps saved workflows in its own user-data tree and exposes no
  * `/workflows` route, so the listing comes from its user-data endpoint. The
  * panel only ever reads here; nothing is written back.
+ *
+ * `baseUrl` in the query is the address currently typed in the form, so a
+ * machine can be listed before its address is saved. An address that cannot be
+ * used is a 400 (the user can fix the box); an unreachable server is a 502.
  */
-async function handleComfyWorkflows(res, options) {
+async function handleComfyWorkflows(req, res, options) {
   const config = await options.store.load()
+  const query = new URL(String(req.url ?? '/'), 'http://localhost').searchParams
+  const requested = (query.get('baseUrl') ?? '').trim()
+  let baseUrl
   try {
-    const { workflows } = await listWorkflows(comfyTarget(config))
-    sendJson(res, 200, { ok: true, baseUrl: comfyTarget(config), workflows })
+    baseUrl = requested === '' ? comfyTarget(config) : comfyBaseUrl(requested)
+  } catch (error) {
+    sendJson(res, 400, { error: error?.message ?? 'ComfyUI 地址不合法' })
+    return
+  }
+  try {
+    const { workflows } = await listWorkflows(baseUrl)
+    sendJson(res, 200, { ok: true, baseUrl, workflows })
   } catch (error) {
     sendJson(res, 502, { error: error?.message ?? '读取 ComfyUI 工作流失败' })
   }

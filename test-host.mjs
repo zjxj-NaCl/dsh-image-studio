@@ -532,6 +532,32 @@ try {
     }
   })
 
+  await check('GET /comfy/workflows honours the address typed on the studio surface', async () => {
+    // The studio page lets the ComfyUI address be edited and read back without
+    // saving the configuration first, so the query must beat whatever is stored.
+    const saved = await send('/config/save', { method: 'POST', body: JSON.stringify({ comfyBaseUrl: 'http://127.0.0.1:1' }) })
+    if (!saved.ok) throw new Error('could not point the panel at a dead ComfyUI: ' + await saved.text())
+    try {
+      const asked = 'http://127.0.0.1:' + String(comfy.address().port) + '/'
+      const r = await fetch(base + '/comfy/workflows?baseUrl=' + encodeURIComponent(asked))
+      if (r.status !== 200) throw new Error('expected 200, got ' + String(r.status) + ': ' + await r.text())
+      const body = await r.json()
+      if (body.baseUrl !== asked.replace(/\/+$/, '')) throw new Error('the answer does not name the address it used: ' + JSON.stringify(body.baseUrl))
+      if (!Array.isArray(body.workflows) || body.workflows.length !== 2) throw new Error('the workflow list is wrong: ' + JSON.stringify(body.workflows))
+      return body.baseUrl
+    } finally {
+      await send('/config/save', { method: 'POST', body: JSON.stringify({ comfyBaseUrl: comfyBaseUrlValue }) })
+    }
+  })
+
+  await check('GET /comfy/workflows rejects an unusable address with a fixable 400', async () => {
+    const r = await fetch(base + '/comfy/workflows?baseUrl=' + encodeURIComponent('ftp://127.0.0.1:8188'))
+    if (r.status !== 400) throw new Error('expected 400, got ' + String(r.status) + ': ' + await r.text())
+    const body = await r.json()
+    if (!String(body.error).includes('http')) throw new Error('unhelpful error: ' + String(body.error))
+    return body.error
+  })
+
   await check('POST /comfy/generate runs a workflow and copies its artifact into the gallery', async () => {
     const stored = (await (await fetch(base + '/gallery')).json()).images.length
     const before = comfyPaths.length

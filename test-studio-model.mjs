@@ -217,6 +217,11 @@ test('a ComfyUI submission carries one workflow and at most one init image', () 
     reference: null,
   })
   assert.deepEqual(comfyPayload({ ...form, workflow: '  sd35_large  ' }, [reference]).workflow, 'sd35_large')
+  // The address typed on the studio surface rides along with the submission, so a
+  // run needs no saved configuration first.
+  assert.deepEqual(comfyPayload({ ...form, comfyBaseUrl: '  http://127.0.0.1:9000  ' }, []).baseUrl, 'http://127.0.0.1:9000')
+  assert.equal(Object.hasOwn(comfyPayload({ ...form, comfyBaseUrl: '   ' }, []), 'baseUrl'), false, 'a blank address must not override the saved one')
+  assert.equal(Object.hasOwn(comfyPayload(form, []), 'baseUrl'), false)
   const body = comfyPayload(form, [reference])
   assert.deepEqual(body.reference, { data: 'AAAA', mediaType: 'image/png', name: 'a.png' })
   // ComfyUI edit workflows take a single init image; the rest are dropped.
@@ -473,10 +478,11 @@ test('the model catalog belongs to one service and is dropped with it', () => {
 test('the workflow catalog records what the local ComfyUI reported', () => {
   const ws = createWorkspace()
   const state = ws.get()
-  assert.deepEqual(state.workflows, [])
+  assert.deepEqual(ws.get().workflows, [])
   assert.equal(state.workflowsLoaded, false)
   assert.equal(state.workflowsBusy, false)
   assert.equal(state.workflowsError, null)
+  assert.equal(state.workflowsFor, '', 'no address has been read yet')
 
   ws.setWorkflowsBusy(true)
   assert.equal(ws.get().workflowsBusy, true)
@@ -488,8 +494,9 @@ test('the workflow catalog records what the local ComfyUI reported', () => {
     null,
     { name: 'pathless' },
     { name: 'sd15', path: 'sd15.json' },
-  ])
+  ], '  http://127.0.0.1:9000  ')
   assert.deepEqual(ws.get().workflows.map((entry) => entry.path), ['duck.json', 'sd15.json'], 'only entries with a path survive')
+  assert.equal(ws.get().workflowsFor, 'http://127.0.0.1:9000', 'the catalog remembers the address it came from')
   assert.equal(ws.get().workflowsLoaded, true)
   assert.equal(ws.get().workflowsBusy, false)
   assert.equal(ws.get().workflowsError, null)

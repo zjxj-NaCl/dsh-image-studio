@@ -227,14 +227,19 @@ export async function refreshModels(options = {}) {
  * the `comfy` mode.
  */
 export async function refreshWorkflows() {
+  // The address in the form is where this read points: the generation surface and
+  // the configuration surface edit the same field, so typing a machine there and
+  // reading its workflows never requires saving first.
+  const baseUrl = String(Model.workspace.get().form.comfyBaseUrl ?? '').trim()
   Model.workspace.setWorkflowsBusy(true)
-  const res = await callPanel('/comfy/workflows')
+  const res = await callPanel('/comfy/workflows' + (baseUrl === '' ? '' : '?baseUrl=' + encodeURIComponent(baseUrl)))
   if (!res.ok) {
     Model.workspace.setWorkflowsError('读取工作流失败：' + res.error)
     return
   }
   const workflows = Array.isArray(res.data?.workflows) ? res.data.workflows : []
-  Model.workspace.setWorkflows(workflows)
+  // The list is only valid for the address it was read from.
+  Model.workspace.setWorkflows(workflows, baseUrl)
   if (workflows.length === 0) {
     Model.workspace.setWorkflowsError('ComfyUI 的 workflows 目录里没有工作流；请先在 ComfyUI 里保存一份工作流（建议用「导出（API 格式）」）。')
   }
