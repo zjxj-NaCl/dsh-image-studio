@@ -42,7 +42,7 @@ import {
   runWorkflow,
   uploadImage,
 } from './comfy.js'
-import { TOOL_NAME, makeComfyTool, resolveDefineTool } from './tool.js'
+import { TOOL_NAME, makeComfyTool, makeComfyToolSpec, resolveDefineTool } from './tool.js'
 
 /** Where a locally running ComfyUI server is expected by default. */
 export const DEFAULT_COMFY_BASE_URL = 'http://127.0.0.1:8188'
@@ -157,18 +157,20 @@ export function apply(ctx, config = {}) {
 async function registerTool(ctx, options) {
   try {
     const defineTool = await resolveDefineTool()
-    if (typeof defineTool !== 'function') return
     await ctx.inject(['tools'], async (toolCtx) => {
       if (typeof toolCtx.tools?.register !== 'function') return
       await toolCtx.inject(['attachments'], (attachCtx) => {
-        toolCtx.tools.register(defineTool(makeComfyTool({
+        const input = {
           run: (body) => comfyRun(options, body),
           admit: (file) => attachCtx.attachments.saveImage({
             data: file.data,
             mediaType: file.mediaType,
             ...(typeof file.name === 'string' && file.name !== '' ? { name: file.name } : {}),
           }),
-        })))
+        }
+        // A Host that hands out `defineTool` gets the shorthand; every other Host
+        // takes the raw definition, which needs no factory and no import.
+        toolCtx.tools.register(typeof defineTool === 'function' ? defineTool(makeComfyToolSpec(input)) : makeComfyTool(input))
         attachCtx.effect(() => () => {}, 'dsh-image-studio: ' + TOOL_NAME + ' with attachments')
       })
     })

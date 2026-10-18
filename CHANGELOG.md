@@ -2,6 +2,20 @@
 
 写法参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.4] - 2026-10-18
+
+`comfyui_generate` 现在真的会出现在对话里：安装型插件过去取不到 `defineTool`，注册函数直接返回，工具在任何会话里都不存在。这一版改成交出宿主本身就能接受的原始定义。
+
+### 修复
+
+- **对话工具注册不上**：插件此前只能通过 VM 沙盒全局 `harness.defineTool` 或 `import('@deepseek-ai/dsh-tools')` 拿到 `defineTool`。安装型插件两条都拿不到 —— `~/.dsh/plugins/` 下面解析不到 `@deepseek-ai/*`，沙盒全局也只有动态包才有 —— 于是 `registerTool()` 一开头就 return，`comfyui_generate` 静默消失。现在：宿主给 `defineTool` 就用它的简写规格，没有就交原始定义 `{ name, description, parameters, output: { schema, render }, timeoutMs, execute }`，`parameters` 与 `output.schema` 都是标准 JSON Schema（`required` 数组、`enum`、`items` 原样保留）。
+- **原始定义没有参数校验**：`tools.register()` 只校验 `output` 声明，所以在 `execute` 里自己拒绝空 `prompt`（文案与面板一致：`缺少提示词：prompt 不能为空。`），不会拿着空提示词去敲 ComfyUI。
+
+### 变更
+
+- `src/tool.js` 新增 `makeComfyTool()`（原始定义，安装型插件用）与 `makeComfyToolSpec()`（`defineTool` 简写），两者共用同一份执行与 render 行为；新增导出 `TOOL_PARAMETER_SPEC`、`TOOL_PARAMETERS_JSON_SCHEMA`、`OUTPUT_JSON_SCHEMA`。
+- `test-tool.mjs` 18 → **23 项**：JSON Schema 编译（`required` 数组、`enum`、`items`、无残留 `required: true`）、空提示词拒绝、两份定义不共享可变 schema、原始定义与简写行为一致。测试合计 220 → **225 项**。
+
 ## [0.11.3] - 2026-10-18
 
 真机联调一轮：接上本机真实的 ComfyUI 后暴露了四个协议细节，全部修掉，现在从生成界面选工作流、跑、看图整条链路实测通过。

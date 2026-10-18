@@ -1,6 +1,6 @@
 {
   "name": "dsh-image-studio",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Image generation studio for DeepSeek Harness: a gallery and a workbench for text-to-image, image-to-image and local ComfyUI workflows, calling OpenAI-compatible, Google, Seedream, DashScope, xAI and Zhipu image APIs directly while the host keeps every credential.",
   "type": "module",
   "scripts": {

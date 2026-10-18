@@ -11,10 +11,13 @@ import assert from 'node:assert/strict'
 
 import {
   IMAGE_VALUE_SCHEMA,
+  OUTPUT_JSON_SCHEMA,
   OUTPUT_SCHEMA,
   TOOL_NAME,
+  TOOL_PARAMETERS_JSON_SCHEMA,
   TOOL_TIMEOUT_MS,
   makeComfyTool,
+  makeComfyToolSpec,
   resolveDefineTool,
 } from './src/tool.js'
 
@@ -203,18 +206,68 @@ test('render stays a single text block when no image came back', async () => {
   assert.equal(blocks[0].type, 'text')
 })
 
-test('the specification is a complete defineTool definition', () => {
+test('the raw definition is a complete registry entry', () => {
   const tool = makeComfyTool({ run: async () => result([]) })
   assert.equal(tool.name, TOOL_NAME)
   assert.equal(typeof tool.description, 'string')
   assert.ok(tool.description.length > 20)
   assert.equal(tool.timeoutMs, TOOL_TIMEOUT_MS)
-  assert.equal(tool.parameters.prompt.required, true, 'a run without a prompt is meaningless')
-  assert.equal(tool.parameters.workflow.required, undefined)
-  assert.equal(tool.parameters.baseUrl.required, undefined)
-  for (const name of Object.keys(tool.parameters)) {
-    assert.equal(typeof tool.parameters[name].description, 'string', name + ' needs a description')
+  assert.equal(typeof tool.execute, 'function')
+  assert.equal(typeof tool.output.render, 'function', 'tools.register() demands output.render')
+  assert.equal(tool.output.schema.type, 'object')
+})
+
+test('the arguments travel as plain JSON Schema', () => {
+  assert.equal(TOOL_PARAMETERS_JSON_SCHEMA.type, 'object')
+  assert.deepEqual(TOOL_PARAMETERS_JSON_SCHEMA.required, ['prompt'], 'a run without a prompt is meaningless')
+  for (const name of Object.keys(TOOL_PARAMETERS_JSON_SCHEMA.properties)) {
+    assert.equal(typeof TOOL_PARAMETERS_JSON_SCHEMA.properties[name].description, 'string', name + ' needs a description')
+    assert.notEqual(TOOL_PARAMETERS_JSON_SCHEMA.properties[name].required, true, name + ' must not keep the shorthand flag')
   }
+  const tool = makeComfyTool({ run: async () => result([]) })
+  assert.deepEqual(tool.parameters, TOOL_PARAMETERS_JSON_SCHEMA, 'the definition publishes exactly this schema')
+})
+
+test('the answer travels as plain JSON Schema too', () => {
+  assert.equal(OUTPUT_JSON_SCHEMA.type, 'object')
+  assert.equal(OUTPUT_JSON_SCHEMA.additionalProperties, false)
+  assert.deepEqual(OUTPUT_JSON_SCHEMA.required, ['ok', 'workflow', 'count', 'elapsedMs', 'gallery', 'text'])
+  assert.equal(OUTPUT_JSON_SCHEMA.properties.image.properties.mediaType.enum.length, 4, 'the enum survives the conversion')
+  assert.equal(OUTPUT_JSON_SCHEMA.properties.gallery.items.type, 'object', 'the gallery item schema survives the array')
+  assert.equal(OUTPUT_JSON_SCHEMA.properties.gallery.items.additionalProperties, false)
+  assert.equal(JSON.stringify(OUTPUT_JSON_SCHEMA).includes('"required":true'), false, 'no shorthand flag is left behind')
+  const tool = makeComfyTool({ run: async () => result([]) })
+  assert.deepEqual(tool.output.schema, OUTPUT_JSON_SCHEMA, 'the definition publishes exactly this schema')
+})
+
+test('a definition never shares its mutable schema with the next one', () => {
+  const first = makeComfyTool({ run: async () => result([]) })
+  first.parameters.properties.extra = { type: 'string' }
+  first.output.schema.properties.extra = { type: 'string' }
+  const second = makeComfyTool({ run: async () => result([]) })
+  assert.equal(Object.hasOwn(second.parameters.properties, 'extra'), false)
+  assert.equal(Object.hasOwn(second.output.schema.properties, 'extra'), false)
+})
+
+test('an empty prompt is refused the way the panel refuses it', async () => {
+  let ran = false
+  const tool = makeComfyTool({ run: async () => { ran = true; return result([]) } })
+  await assert.rejects(() => tool.execute({ prompt: '   ' }), /缺少提示词/)
+  await assert.rejects(() => tool.execute({}), /缺少提示词/)
+  assert.equal(ran, false, 'nothing reaches ComfyUI without a prompt')
+})
+
+test('the defineTool shorthand carries the same behaviour', async () => {
+  const seen = []
+  const spec = makeComfyToolSpec({ run: async (body) => { seen.push(body); return result([FILE]) }, admit: async () => REF })
+  assert.equal(spec.name, TOOL_NAME)
+  assert.equal(spec.timeoutMs, TOOL_TIMEOUT_MS)
+  assert.equal(spec.parameters.prompt.required, true, 'the shorthand keeps its per-property flag')
+  assert.deepEqual(spec.output.schema, OUTPUT_SCHEMA, 'the shorthand keeps the shorthand value schema')
+  const value = await spec.execute({ prompt: 'a duck' })
+  assert.deepEqual(seen, [{ prompt: 'a duck' }])
+  assert.equal(value.image.attachmentId, REF.attachmentId)
+  assert.equal(spec.output.render({}, value).length, 2)
 })
 
 test('resolveDefineTool answers with a factory or nothing at all', async () => {
