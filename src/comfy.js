@@ -589,8 +589,51 @@ export async function listWorkflows(baseUrl, timeoutMs = CATALOG_TIMEOUT_MS) {
     .filter((entry) => entry.type !== 'dir')
     .filter((entry) => !isNoiseFile(entry.path))
     .map((entry) => ({ name: displayName(entry), path: entry.path }))
-    .sort((left, right) => left.name.localeCompare(right.name))
+    .sort((left, right) => compareNames(left.name, right.name) || compareNames(left.path, right.path))
   return { workflows: disambiguate(workflows) }
+}
+
+/**
+ * Compare two labels in an order that is the same on every machine.
+ *
+ * `localeCompare` sorts by the ICU default locale, which follows the host:
+ * this box (Chinese Windows) put `测试_API` before `anime style SDXL`, while
+ * the Linux CI runner put the English name first. A list that reshuffles by
+ * platform is a list whose order nobody can rely on, and its test can only
+ * pass on one of the two. Comparing code units instead is identical
+ * everywhere, and reading runs of digits as numbers keeps `AN2` ahead of
+ * `AN10` the way a reader expects.
+ *
+ * @param left - the first label, either a name or a path.
+ * @param right - the second label.
+ * @returns a negative number, zero, or a positive number, as usual.
+ */
+function compareNames(left, right) {
+  const a = splitRuns(String(left).toLowerCase())
+  const b = splitRuns(String(right).toLowerCase())
+  const shared = Math.min(a.length, b.length)
+  for (let index = 0; index < shared; index += 1) {
+    const x = a[index]
+    const y = b[index]
+    if (x === y) continue
+    const numeric = /^\d+$/.test(x) && /^\d+$/.test(y)
+    if (numeric) {
+      const difference = Number(x) - Number(y)
+      if (difference !== 0) return difference < 0 ? -1 : 1
+      // `02` and `2` count the same; keep the longer run first so the order
+      // stays total instead of depending on the input order.
+      if (x.length !== y.length) return x.length < y.length ? -1 : 1
+      continue
+    }
+    return x < y ? -1 : 1
+  }
+  if (a.length === b.length) return 0
+  return a.length < b.length ? -1 : 1
+}
+
+/** Split a label into alternating runs of digits and everything else. */
+function splitRuns(label) {
+  return label.match(/\d+|\D+/g) ?? []
 }
 
 /**

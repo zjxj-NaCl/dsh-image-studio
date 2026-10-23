@@ -26,7 +26,31 @@ async function withComfy(handler, body) {
     const parsed = new URL(req.url, 'http://127.0.0.1')
     handler(parsed, req, res)
   })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+/**
+ * Listen on a free loopback port that `fetch` is willing to talk to.
+ *
+ * `listen(0)` picks any port from the ephemeral range, and the Fetch standard
+ * refuses a fixed list of them outright (6000 and 6665-6669 among others). A
+ * stub bound there accepts connections, but every `fetch` to it dies with
+ * "bad port" before a byte is sent, so the test would fail for a reason that has
+ * nothing to do with the code under test. Rebind until the port is acceptable.
+ */
+const FETCH_BLOCKED_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+  101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
+  179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563,
+  587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060,
+  5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+])
+async function listenOnFetchablePort(server) {
+  for (;;) {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    if (!FETCH_BLOCKED_PORTS.has(server.address().port)) return
+    await new Promise((resolve) => server.close(resolve))
+  }
+}
+
+  await listenOnFetchablePort(server)
   const base = 'http://127.0.0.1:' + String(server.address().port)
   try {
     return await body(base, requests)
@@ -247,11 +271,43 @@ test('same-named workflows carry their folder so the picker can tell them apart'
   }, async (base) => {
     const listed = await listWorkflows(base)
     const names = listed.workflows.map((entry) => entry.name)
-    // The list is sorted by the original name, so the two `测试_API` entries come
-    // together and only their labels gained a folder.
-    assert.deepEqual(names, ['本机实测/测试_API', '本机实测/测试_API', 'anime style SDXL'])
+    // Order is pinned by its own test below; here only the labels matter, so a
+    // change to the comparator cannot masquerade as a labelling regression.
+    assert.deepEqual([...names].sort(), ['anime style SDXL', '本机实测/测试_API', '本机实测/测试_API'])
     // The path is untouched: the run still addresses the exact file.
     assert.deepEqual(listed.workflows.map((entry) => entry.path).sort(), entries.map((entry) => entry.path).sort())
+  })
+})
+
+test('the workflow list comes out in the same order on every machine', async () => {
+  // `localeCompare` follows the ICU default locale, so this list used to change
+  // order between a Chinese Windows box and an English Linux runner: the local
+  // run put `测试_API` first, CI put `anime style SDXL` first, and the test could
+  // only ever pass on one of them. The comparator now follows code units, which
+  // is the same everywhere, and reads digit runs as numbers so `AN2` stays ahead
+  // of `AN10`.
+  const entries = [
+    { name: 'AN10_v2.json', path: 'workflows/AN10_v2.json', type: 'file' },
+    { name: 'anime style SDXL.json', path: 'workflows/anime style SDXL.json', type: 'file' },
+    { name: 'AN2_v2.json', path: 'workflows/AN2_v2.json', type: 'file' },
+    { name: '测试_API.json', path: 'workflows/测试_API.json', type: 'file' },
+    { name: 'FLUX_dev.json', path: 'workflows/FLUX_dev.json', type: 'file' },
+    { name: 'C01_手部检查_裁切与蒙版.json', path: 'workflows/C01_手部检查_裁切与蒙版.json', type: 'file' },
+  ]
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(entries))
+  }, async (base) => {
+    const listed = await listWorkflows(base)
+    // ASCII before CJK, digit runs compared as numbers, case folded.
+    assert.deepEqual(listed.workflows.map((entry) => entry.name), [
+      'AN2_v2',
+      'AN10_v2',
+      'anime style SDXL',
+      'C01_手部检查_裁切与蒙版',
+      'FLUX_dev',
+      '测试_API',
+    ])
   })
 })
 
