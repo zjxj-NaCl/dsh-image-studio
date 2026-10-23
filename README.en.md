@@ -1,6 +1,6 @@
 # DSH Image Studio (dsh-image-studio)
 
-[中文](README.md) · [Install](INSTALL.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[中文](README.md) · [Install](INSTALL.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Acceptance](ACCEPTANCE.md)
 
 [![test](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml/badge.svg)](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/tag/zjxj-NaCl/dsh-image-studio?label=release)](https://github.com/zjxj-NaCl/dsh-image-studio/tags)
@@ -36,7 +36,7 @@ The host half registers the same-origin prefix route `/image-studio` on `webServ
 
 Prerequisites, the three installation routes (desktop GUI / `dsh plugin` command line / building from source), post-install configuration, environment variables, uninstall/upgrade, and a troubleshooting table all live in [INSTALL.md](INSTALL.md). The shortest path is three steps:
 
-1. **Get the package**: `npm pack` produces `dsh-image-studio-0.11.6.tgz`; or point the plugin manager straight at the Git URL `https://github.com/zjxj-NaCl/dsh-image-studio.git`, or at the directory you cloned.
+1. **Get the package**: `npm pack` produces `dsh-image-studio-0.11.7.tgz`; or point the plugin manager straight at the Git URL `https://github.com/zjxj-NaCl/dsh-image-studio.git`, or at the directory you cloned.
 2. **Install**: pick this archive (or enter the Git URL / local path above) in the DSH plugin management UI, then **restart DSH** — the host half registers its routes only at startup, so refreshing the front end alone is not enough.
 3. **Configure**: fill in the service URL, model name, and key under "Model configuration" in the panel. Installing is not configuring; the key is stored by the DSH credential service and is **not written into** this plugin's `config.json`. Data lands in `<DSH_HOME>/cache/dsh-image-studio/` (that is `~/.dsh/cache/dsh-image-studio/` when `DSH_HOME` is unset).
 
@@ -239,7 +239,7 @@ After upgrading the plugin you must restart DSH to load the new host routes; ref
 
 `npm test` (build consistency + every script in the table above) passes: `test-image-api.mjs` 23 items, `test-studio-model.mjs` 24 items, `test-client.mjs` 46 items, `test-host.mjs` 44 items, `test-auth.mjs` 8 items, `test-tool.mjs` 23 items, `test-comfy.mjs` 21 items, and `test-package.mjs` 18 items, plus the old conversation half's `test-bridge.mjs` 14 items and `test-bridge-route.mjs` 13 items (234 items in total).
 
-The release shape was verified too: the `dsh-image-studio-0.11.6.tgz` produced by `npm pack` contains exactly 35 files (matching the `files` expansion, no more and no fewer), and after extracting it into an empty directory **the whole `npm test` suite and the real cordis injection test (`test-host-inject.mjs`, 4 items) run straight through** — that is, whoever receives the tarball gets the sources, the build scripts, and all the tests, with no dependence on any other file in this repository. The host half's startup check on a real DSH covers route mounting only, so you still need a manual look at the panel after restarting. GitHub Actions runs exactly the same chain: `node build.mjs --check` → `npm test` → pack, unpack, then `npm test` again.
+The release shape was verified too: the `dsh-image-studio-0.11.7.tgz` produced by `npm pack` contains exactly 36 files (matching the `files` expansion, no more and no fewer), and after extracting it into an empty directory **the whole `npm test` suite and the real cordis injection test (`test-host-inject.mjs`, 4 items) run straight through** — that is, whoever receives the tarball gets the sources, the build scripts, and all the tests, with no dependence on any other file in this repository. The host half's startup check on a real DSH covers route mounting only, so you still need a manual look at the panel after restarting. GitHub Actions runs exactly the same chain: `node build.mjs --check` → `npm test` → pack, unpack, then `npm test` again.
 
 What has been accepted on a real machine: the **local ComfyUI end to end**. `/comfy/workflows` read 36 runnable workflows from a real ComfyUI (`metadata.json` and the `.before-*` backups were filtered out), and `/comfy/generate` produced one 3.16 MB PNG from a 46-node multi-stage workflow in about 40 seconds; the same workflow then ran once more through the conversational `comfyui_generate` tool, and the picture came back into the conversation as a content block. An illegal URL (`ftp://…`) is rejected with 400 and an empty URL falls back to the configured value, both verified.
 
@@ -250,7 +250,7 @@ What has not been accepted yet: real image-service calls (OpenAI / Google / xAI 
 - Want to modify it locally? Development environment, source/artifact conventions, test entry points, and the PR checklist are in [CONTRIBUTING.md](CONTRIBUTING.md).
 - Found a security issue (key leakage, path traversal, cross-site writes, and so on): **do not open a public issue**; use the private channel described in [SECURITY.md](SECURITY.md).
 - Just want to ask a question or make a suggestion: open an [issue](https://github.com/zjxj-NaCl/dsh-image-studio/issues) directly; the template will prompt you for the environment information to include.
-- For version changes see [CHANGELOG.md](CHANGELOG.md).
+- For version changes see [CHANGELOG.md](CHANGELOG.md); the item-by-item acceptance record is in [ACCEPTANCE.md](ACCEPTANCE.md).
 
 ## License
 

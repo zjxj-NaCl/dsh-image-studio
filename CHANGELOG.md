@@ -2,6 +2,20 @@
 
 写法参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.7] - 2026-10-22
+
+把验收记录留在仓库里的同时，也让它跟着包走：新增 `ACCEPTANCE.md`（架构总览、16 条路由、A–G 七组验收项、真机证据、已知限制、复现命令），并纳入 `files` 白名单与部署清单，发布集合从 35 个文件变成 36 个。
+
+### 修复
+
+- **文档里有一段不存在的功能**：`ACCEPTANCE.md` 初稿把一条已回退的「Agent 生图通道」写成了「未发布改动」，还据此声称路由 16 条、多一个 `test-agent-channel.mjs`、发布集合会变成 36 个。实际 `STUDIO_MODES` 只有 `generate` / `edit` / `comfy`，路由 14 条，包里没有那个测试文件。现已改为记录「该改动已回退」，并补齐核对方式。
+
+### 变更
+
+- `package.json` 的 `files`、`deploy-local.ps1` 的 35 项清单（及那句件数断言）、`test-package.mjs` 的 `DOCUMENTS` 三处同步加入 `ACCEPTANCE.md`。
+- 中英文 README 的导航栏与末尾链接加上验收文档入口，产物名与件数同步为 0.11.7 / 36 个文件；`INSTALL.md` 的离线包名同步。
+- 测试无新增用例：仍 10 个脚本 234 项。
+
 ## [0.11.6] - 2026-10-18
 
 0.11.5 之后剩下的一个路径问题：工作流放在 `workflows/` 的子目录里时，对话工具仍然报 404。

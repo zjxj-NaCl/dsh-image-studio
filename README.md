@@ -1,6 +1,6 @@
 # DSH 生图工作台（dsh-image-studio）
 
-[English](README.en.md) · [安装](INSTALL.md) · [变更记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md) · [安全策略](SECURITY.md)
+[English](README.en.md) · [安装](INSTALL.md) · [变更记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [验收记录](ACCEPTANCE.md)
 
 [![test](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml/badge.svg)](https://github.com/zjxj-NaCl/dsh-image-studio/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/tag/zjxj-NaCl/dsh-image-studio?label=release)](https://github.com/zjxj-NaCl/dsh-image-studio/tags)
@@ -36,7 +36,7 @@ DSH 插件包，在 DeepSeek Harness Web GUI 侧栏提供两个入口：
 
 前置条件、三条安装路线（桌面版图形界面 / `dsh plugin` 命令行 / 源码构建）、装后配置、环境变量、卸载升级与排错表都在 [INSTALL.md](INSTALL.md)。最短路径三步：
 
-1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.6.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
+1. **拿到安装包**：`npm pack` 生成 `dsh-image-studio-0.11.7.tgz`；也可以让插件管理器直接读 Git 地址 `https://github.com/zjxj-NaCl/dsh-image-studio.git`，或指向你克隆下来的目录。
 2. **装**：在 DSH 的插件管理界面里选这个压缩包（或填上面的 Git 地址 / 本地路径），装完**重启 DSH**——宿主半只在启动时注册路由，只刷新前端不生效。
 3. **配**：在面板的「模型配置」里填服务地址、模型名与密钥。安装不等于配置；密钥经 DSH 凭据服务保存，**不写进**本插件的 `config.json`。数据落在 `<DSH_HOME>/cache/dsh-image-studio/`（未设置 `DSH_HOME` 时即 `~/.dsh/cache/dsh-image-studio/`）。
 
@@ -239,7 +239,7 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 
 `npm test`（build 一致性 + 上表全部脚本）通过：`test-image-api.mjs` 23 项、`test-studio-model.mjs` 24 项、`test-client.mjs` 46 项、`test-host.mjs` 44 项、`test-auth.mjs` 8 项、`test-tool.mjs` 23 项、`test-comfy.mjs` 21 项、`test-package.mjs` 18 项，另有旧对话半的 `test-bridge.mjs` 14 项与 `test-bridge-route.mjs` 13 项（合计 234 项）。
 
-发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.6.tgz` 内恰好 35 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
+发布形态也验过一次：`npm pack` 出的 `dsh-image-studio-0.11.7.tgz` 内恰好 36 个文件（与 `files` 展开一致，没有多也没有少），把它解到空目录后**整套 `npm test` 与真实 cordis 注入测试（`test-host-inject.mjs`，4 项）都能直接跑过**——即别人拿到的 tarball 自带源码、构建脚本与全部测试，不依赖本仓库里的任何其它文件。宿主半在真实 DSH 上的启动检查仅覆盖路由挂载，仍需重启后人工看一眼面板。GitHub Actions 上跑的就是同一条链：`node build.mjs --check` → `npm test` → 打包、解包后再 `npm test`。
 
 已经真机验收的部分：**本机 ComfyUI 端到端**。`/comfy/workflows` 从真实的 ComfyUI 读到 36 个可运行工作流（`metadata.json` 与 `.before-*` 备份都被滤掉），`/comfy/generate` 用其中一张 46 节点的多段式工作流跑出 1 张 3.16 MB 的 PNG，耗时约 40 秒；同一个工作流经对话工具 `comfyui_generate` 再跑一次，图片以内容块回到了对话里。非法地址（`ftp://…`）按 400 拒绝、空地址回落配置值，也都验过。
 
@@ -250,7 +250,7 @@ node test-host-inject.mjs '<DSH 安装目录>/resources/app/package.json'
 - 想在本地改：开发环境、源码/产物约定、测试入口与提 PR 的清单见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 - 发现安全问题（密钥外泄、路径穿越、跨站写等）：**不要开公开 issue**，按 [SECURITY.md](SECURITY.md) 走私密通道。
 - 只是想提问题或建议：直接开 [issue](https://github.com/zjxj-NaCl/dsh-image-studio/issues)，模板会提示该带上哪些环境信息。
-- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)，逐项验收结论见 [ACCEPTANCE.md](ACCEPTANCE.md)。
 
 ## 许可证
 

@@ -77,7 +77,7 @@ const SOURCES = [
   'src/studio-model.js', 'src/model-config.js', 'src/conversation-host.js', 'src/bridge.js',
 ]
 
-const DOCUMENTS = ['README.md', 'README.en.md', 'INSTALL.md', 'CHANGELOG.md', 'LICENSE']
+const DOCUMENTS = ['README.md', 'README.en.md', 'INSTALL.md', 'CHANGELOG.md', 'ACCEPTANCE.md', 'LICENSE']
 
 const TEXT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml', '.txt', '.ps1']
 

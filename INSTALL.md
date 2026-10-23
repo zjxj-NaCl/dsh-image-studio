@@ -20,7 +20,7 @@
 
 1. 打开 **设置 → 插件**。
 2. 点 **添加插件**，在输入框里填下列任一形式：
-   - **离线包绝对路径**：`C:\path\to\dsh-image-studio-0.11.6.tgz`（或在 macOS / Linux 上 `/path/to/dsh-image-studio-0.11.6.tgz`）
+   - **离线包绝对路径**：`C:\path\to\dsh-image-studio-0.11.7.tgz`（或在 macOS / Linux 上 `/path/to/dsh-image-studio-0.11.7.tgz`）
    - **Git 地址**：`https://github.com/zjxj-NaCl/dsh-image-studio.git`
    - **包名**：`dsh-image-studio`（仅在发布到 registry 之后才有意义；中国大陆可在「安装源」里选国内镜像）
 3. 确认安装。安装失败时对话框会给出原因；连不上 GitHub 时会提供「改用国内镜像」。
@@ -30,7 +30,7 @@
 
 ```sh
 # 离线 tarball
-dsh plugin --profile web add ./dsh-image-studio-0.11.6.tgz
+dsh plugin --profile web add ./dsh-image-studio-0.11.7.tgz
 # 发布到 registry 之后
 dsh plugin --profile web add dsh-image-studio
 # 直接指向源码目录（开发用）
@@ -46,7 +46,7 @@ dsh plugin --profile web add "link:C:\path\to\dsh-image-studio"
 git clone https://github.com/zjxj-NaCl/dsh-image-studio.git dsh-image-studio
 cd dsh-image-studio
 npm test          # 不需要网络，也不需要装 DSH
-npm pack          # 得到 dsh-image-studio-0.11.6.tgz
+npm pack          # 得到 dsh-image-studio-0.11.7.tgz
 ```
 
 拿到 tarball 后按路线 A 或 B 安装。`src/` 是可读源码，`lib/` 是构建产物（由 `npm run build` 生成，不要手改）。
