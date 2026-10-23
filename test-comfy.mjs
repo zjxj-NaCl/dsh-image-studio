@@ -194,6 +194,80 @@ test('run records and edit backups stay out of the picker', async () => {
     ])
   })
 })
+
+test('experiment notes are not offered as workflows', async () => {
+  // The same folder also held `运行记录.json`, `安装检查记录.json`,
+  // `验证记录.json` and `待修复数据包位置.json`. They parse as JSON and some
+  // even carry nodes/links-shaped data, so the picker has to recognise them by
+  // name: choosing one is guaranteed to fail at run time.
+  const entries = [
+    { name: '运行记录.json', path: 'workflows/FLUX/Bpart/测试结果/运行记录.json', type: 'file' },
+    { name: '安装检查记录.json', path: 'workflows/FLUX/Cpart/安装检查记录.json', type: 'file' },
+    { name: '验证记录.json', path: 'workflows/FLUX/Cpart/验证输出/验证记录.json', type: 'file' },
+    { name: '待修复数据包位置.json', path: 'workflows/FLUX/Cpart/本机实测/待修复数据包位置.json', type: 'file' },
+    { name: 'readme.json', path: 'workflows/readme.json', type: 'file' },
+    // English endings count only as a whole trailing word: a separator before
+    // the suffix is enough, no surrounding spaces are required.
+    { name: '运行_log.json', path: 'workflows/FLUX/Bpart/运行_log.json', type: 'file' },
+    // A real workflow whose name merely *contains* one of those words must stay.
+    { name: 'C01_手部检查_裁切与蒙版.json', path: 'workflows/FLUX/Cpart/C01_手部检查_裁切与蒙版.json', type: 'file' },
+    { name: 'A01_Klein_Base_FP8_构图.json', path: 'workflows/FLUX/A_构图/A01_Klein_Base_FP8_构图.json', type: 'file' },
+    // …and so must names that merely *end* with a suffix's letters: `dialog` and
+    // `catalog` both end with `log`, yet both are legitimate workflow names.
+    { name: 'dialog.json', path: 'workflows/FLUX/dialog.json', type: 'file' },
+    { name: 'catalog.json', path: 'workflows/FLUX/catalog.json', type: 'file' },
+  ]
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(entries))
+  }, async (base) => {
+    const listed = await listWorkflows(base)
+    assert.deepEqual(listed.workflows.map((entry) => entry.path), [
+      'workflows/FLUX/A_构图/A01_Klein_Base_FP8_构图.json',
+      'workflows/FLUX/Cpart/C01_手部检查_裁切与蒙版.json',
+      'workflows/FLUX/catalog.json',
+      'workflows/FLUX/dialog.json',
+    ])
+  })
+})
+
+test('same-named workflows carry their folder so the picker can tell them apart', async () => {
+  // Several experiment folders each hold a `测试_API.json`; a dropdown with four
+  // identical labels is unusable because the user cannot see which one they are
+  // choosing. Only the colliding names are rewritten, so unique entries keep the
+  // short label.
+  const entries = [
+    { name: '测试_API.json', path: 'workflows/FLUX/Cpart/本机实测/测试_API.json', type: 'file' },
+    { name: '测试_API.json', path: 'workflows/SDXL/Bpart/本机实测/测试_API.json', type: 'file' },
+    { name: 'anime style SDXL.json', path: 'workflows/anime style SDXL.json', type: 'file' },
+  ]
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(entries))
+  }, async (base) => {
+    const listed = await listWorkflows(base)
+    const names = listed.workflows.map((entry) => entry.name)
+    // The list is sorted by the original name, so the two `测试_API` entries come
+    // together and only their labels gained a folder.
+    assert.deepEqual(names, ['本机实测/测试_API', '本机实测/测试_API', 'anime style SDXL'])
+    // The path is untouched: the run still addresses the exact file.
+    assert.deepEqual(listed.workflows.map((entry) => entry.path).sort(), entries.map((entry) => entry.path).sort())
+  })
+})
+
+test('a workflow saved with a byte-order mark still reads', async () => {
+  // Two files in a real workflows/ tree began with EF BB BF. ComfyUI's own UI
+  // reads them, so refusing them here would look like a bug to the user.
+  const body = '\uFEFF' + JSON.stringify(API_ONLY_WORKFLOW)
+  await withComfy((url, req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(body)
+  }, async (base) => {
+    const { graph } = await readWorkflow(base, 'workflows/bom.json')
+    assert.equal(graph['1'].class_type, 'CheckpointLoaderSimple')
+  })
+})
+
 // --- UI to API conversion ----------------------------------------------------
 
 const KSAMPLER_SPEC = spec([

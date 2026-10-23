@@ -43,6 +43,28 @@ const MAX_IMAGE_BYTES = 32 * 1024 * 1024
 /** ComfyUI's own name for the directory holding saved workflows. */
 const WORKFLOWS_DIR = 'workflows'
 
+/**
+ * Name endings that mark a `.json` in `workflows/` as a note, not a workflow.
+ *
+ * `workflows/` collects more than workflows: this machine's folder held
+ * `运行记录.json`, `安装检查记录.json`, `验证记录.json` and
+ * `待修复数据包位置.json` beside the runnable graphs. None of them can be
+ * queued, so they must not reach the picker.
+ *
+ * Only *endings* are matched, never substrings: a real workflow called
+ * `C01_手部检查_裁切与蒙版.json` contains 「检查」 but ends with 「蒙版」, and
+ * hiding it would be far worse than listing a stray note.
+ *
+ * The two alphabets need different rules. Chinese has no word boundaries, so a
+ * trailing 「记录」 is reliably a note. English does, so an English suffix only
+ * counts as a whole trailing word: a plain `endsWith('log')` would swallow
+ * `dialog` and `catalog`, which are perfectly plausible workflow names.
+ */
+const NOTE_SUFFIXES_ZH = ['记录', '日志', '位置', '说明', '清单', '索引', '校验', '备注']
+
+/** English note endings, matched as a trailing delimited word only. */
+const NOTE_SUFFIXES_EN = ['notes', 'note', 'records', 'record', 'logs', 'log', 'readme', 'manifest', 'index']
+
 /** Node classes that hold the prompt text a workflow consumes. */
 const TEXT_ENCODE_CLASSES = ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'CLIPTextEncodeFlux', 'CLIPTextEncodeHunyuanDiT', 'CLIPTextEncodeQwenImage']
 
@@ -568,16 +590,45 @@ export async function listWorkflows(baseUrl, timeoutMs = CATALOG_TIMEOUT_MS) {
     .filter((entry) => !isNoiseFile(entry.path))
     .map((entry) => ({ name: displayName(entry), path: entry.path }))
     .sort((left, right) => left.name.localeCompare(right.name))
-  return { workflows }
+  return { workflows: disambiguate(workflows) }
+}
+
+/**
+ * Give same-named workflows their folder so the picker can tell them apart.
+ *
+ * A `workflows/` tree with one folder per experiment repeats names: this
+ * machine had five files called `运行记录.json`, and several folders each hold
+ * a `测试_API.json`. An option label that repeats is unusable in a dropdown —
+ * the user cannot see which one they are choosing — so a name shared by more
+ * than one entry becomes `<folder>/<name>`. Unique names are left untouched,
+ * since the picker already shows the folder in its tooltip.
+ *
+ * @param workflows - `{ name, path }` entries, already filtered and sorted.
+ * @returns the same entries, with only colliding names rewritten.
+ */
+function disambiguate(workflows) {
+  const counts = new Map()
+  for (const entry of workflows) counts.set(entry.name, (counts.get(entry.name) ?? 0) + 1)
+  return workflows.map((entry) => {
+    if (counts.get(entry.name) === 1) return entry
+    const segments = entry.path.split('/')
+    // `workflows/<folder>/<file>.json` -> `<folder>`; the `workflows/` prefix is
+    // the same for every entry and would not separate anything.
+    const folder = segments.length >= 2 ? segments[segments.length - 2] : ''
+    if (folder === '' || folder === WORKFLOWS_DIR) return entry
+    return { name: folder + '/' + entry.name, path: entry.path }
+  })
 }
 
 /**
  * Whether a `.json` file in `workflows/` is something other than a workflow.
  *
  * That folder collects more than workflows: the web app and several custom
- * nodes drop `metadata.json` beside them, and editing scripts leave `.before-…`
- * backups. None of them can be queued, so the picker hides them instead of
- * burying the real workflows in noise.
+ * nodes drop `metadata.json` beside them, editing scripts leave `.before-…`
+ * backups, and experiments leave notes (`运行记录.json`, `安装检查记录.json`,
+ * `验证记录.json`, `待修复数据包位置.json`) that are not graphs at all.
+ * None of them can be queued, so the picker hides them instead of burying the
+ * real workflows in noise.
  *
  * @param path - the entry's path inside the user-data folder.
  * @returns true when the entry should be left out of the list.
@@ -585,10 +636,34 @@ export async function listWorkflows(baseUrl, timeoutMs = CATALOG_TIMEOUT_MS) {
 function isNoiseFile(path) {
   const segments = path.split('/')
   const base = segments[segments.length - 1] ?? ''
+  const stem = base.replace(/\.json$/i, '').trim().toLowerCase()
   if (base.toLowerCase() === 'metadata.json') return true
   // Editing scripts snapshot a workflow as `<name>.before-<tag>-<stamp>.json`.
   if (/(^|\.)before[-.]/i.test(base)) return true
-  return segments.some((segment) => segment.startsWith('.'))
+  if (segments.some((segment) => segment.startsWith('.'))) return true
+  // A note is recognised by how its name *ends*, which is what separates
+  // `安装检查记录` from a real workflow such as `C01_手部检查_裁切与蒙版`.
+  if (stem === '') return true
+  return endsWithNoteSuffix(stem)
+}
+
+/**
+ * Whether a lowercased file stem ends with a note suffix.
+ *
+ * @param stem - the file name without `.json`, trimmed and lowercased.
+ * @returns true when the name reads as a note rather than a workflow.
+ */
+function endsWithNoteSuffix(stem) {
+  if (NOTE_SUFFIXES_ZH.some((suffix) => stem.endsWith(suffix))) return true
+  return NOTE_SUFFIXES_EN.some((suffix) => {
+    if (stem === suffix) return true
+    if (!stem.endsWith(suffix)) return false
+    // Whole word only: `dialog` and `catalog` end with `log` but are names a
+    // workflow could legitimately have, so the character before the suffix has
+    // to be a separator rather than another letter or digit.
+    const before = stem.charAt(stem.length - suffix.length - 1)
+    return !/[a-z0-9]/.test(before)
+  })
 }
 
 /** A short label for a workflow entry, from its path when it has no name. */
@@ -846,14 +921,32 @@ export async function checkConnection(baseUrl) {
   return { ok: response.ok, status: response.status }
 }
 
+/**
+ * Strip a leading byte-order mark before parsing JSON.
+ *
+ * `JSON.parse` rejects a leading U+FEFF, but plenty of hand-saved or
+ * editor-saved files in `workflows/` carry one — this machine had two. ComfyUI's
+ * own UI reads them (a browser fetch decodes and ignores the BOM), so a user
+ * can legitimately be holding a workflow the panel then refuses as "not valid
+ * JSON". Only the very first character is dropped; a BOM anywhere else is still
+ * a real syntax error.
+ *
+ * @param text - the raw response body.
+ * @returns the parse result, or undefined when the text is not JSON.
+ */
+function parseJsonText(text) {
+  const raw = typeof text === 'string' ? text : String(text ?? '')
+  try { return JSON.parse(raw) } catch { /* fall through to the BOM retry */ }
+  if (raw.charCodeAt(0) !== 0xFEFF) return undefined
+  try { return JSON.parse(raw.slice(1)) } catch { return undefined }
+}
+
 /** One GET that tolerates a non-JSON or failing answer. */
 async function getJson(url, timeoutMs) {
   try {
     const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) })
     const text = await response.text()
-    let data
-    try { data = JSON.parse(text) } catch { data = undefined }
-    return { ok: response.ok, status: response.status, data, text }
+    return { ok: response.ok, status: response.status, data: parseJsonText(text), text }
   } catch (error) {
     return { ok: false, status: undefined, data: undefined, error }
   }
@@ -869,9 +962,7 @@ async function postJson(url, body, timeoutMs) {
       signal: AbortSignal.timeout(timeoutMs),
     })
     const text = await response.text()
-    let data
-    try { data = JSON.parse(text) } catch { data = undefined }
-    return { ok: response.ok, status: response.status, data, text }
+    return { ok: response.ok, status: response.status, data: parseJsonText(text), text }
   } catch (error) {
     return { ok: false, status: undefined, data: undefined, error }
   }
